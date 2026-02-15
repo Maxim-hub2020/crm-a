@@ -51,7 +51,7 @@
         import React, { useState, useEffect, useRef, useMemo } from 'react';
         import { createRoot } from 'react-dom/client';
         import * as Lucide from 'lucide-react';
-        import { initializeApp } from 'firebase/app';
+        import { initializeApp, getApps, getApp } from 'firebase/app';
         import { getAuth, signInAnonymously, onAuthStateChanged, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
         import { getFirestore, collection, onSnapshot, doc, addDoc, updateDoc, deleteDoc, serverTimestamp, setDoc, getDoc, query, where, orderBy, getDocs } from 'firebase/firestore';
 
@@ -82,7 +82,7 @@
         // Инициализация Firebase
         let app, auth, db;
         try {
-            app = initializeApp(firebaseConfig);
+            app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
             auth = getAuth(app);
             db = getFirestore(app);
         } catch (e) {
@@ -107,13 +107,41 @@
         const localCommandParser = (text) => {
             const lower = text.toLowerCase();
             const today = new Date().toISOString().split('T')[0];
-            if (lower.includes("проект") || lower.includes("сделка") || lower.includes("заказ")) {
-                 const title = text.replace(/создать проект|новая сделка|проект|сделка|заказ/gi, '').trim();
-                 return { action: "create_deal", data: { title: title.charAt(0).toUpperCase() + title.slice(1) || "Новый проект", value: 0 } };
+
+            const createRegex = /создать|добавить|новый/;
+            const entityRegex = {
+                deal: /проект|сделк|заказ/,
+                task: /задач|напомнить/,
+                client: /клиент/,
+                transaction: /операци|транзакци|доход|расход/,
+            };
+
+            for (const key in entityRegex) {
+                if (entityRegex[key].test(lower)) {
+                    let title = text.replace(createRegex, '').replace(entityRegex[key], '').trim();
+                    const capitalizedTitle = title.charAt(0).toUpperCase() + title.slice(1);
+                    
+                    switch (key) {
+                        case 'deal':
+                            return { action: "create_deal", data: { title: capitalizedTitle || "Новый проект", value: 0 } };
+                        case 'task':
+                            return { action: "create_task", data: { title: capitalizedTitle || "Голосовая заметка", dueDate: today } };
+                        case 'client':
+                            return { action: "create_client", data: { name: capitalizedTitle || "Новый клиент" } };
+                        case 'transaction':
+                            const amountMatch = text.match(/(\d+)/);
+                            const amount = amountMatch ? Number(amountMatch[0]) : 0;
+                            const type = /доход/.test(lower) ? 'income' : 'expense';
+                            const description = title.replace(/(\\d+)/, '').trim();
+                            return { action: "create_transaction", data: { description: description || "Финансовая операция", amount, type, date: today, status: 'fact' } };
+                        default:
+                            break;
+                    }
+                }
             }
-            const title = text.replace(/создать задачу|добавить задачу|задача|напомнить/gi, '').trim();
-            return { action: "create_task", data: { title: (title.charAt(0).toUpperCase() + title.slice(1)) || "Голосовая заметка", dueDate: today } };
+            return { action: "create_task", data: { title: text, dueDate: today } };
         };
+
 
         // --- ATOMIC COMPONENTS ---
         const Label = ({children}) => <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">{children}</label>;
@@ -176,11 +204,80 @@
             const handleAdd = async () => { if(!name.trim()) return; await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, col), { name: name.trim() }); setName(''); };
             return (<div className="space-y-3"><div className="flex gap-2"><Input value={name} onChange={e=>setName(e.target.value)} placeholder={placeholder} className="flex-1" /><button onClick={handleAdd} className="bg-gray-900 text-white px-4 rounded-xl font-bold">OK</button></div><div className="flex flex-wrap gap-2">{items.map(i => (<span key={i.id} className="bg-white border px-3 py-1.5 rounded-full flex items-center gap-2 text-xs font-bold uppercase text-gray-600 shadow-sm">{i.name}<button onClick={()=>deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, col, i.id))}><X className="w-3 h-3 hover:text-red-500"/></button></span>))}</div></div>);
         }
+
         function TeamManager({ user, db, managers }) {
-            const [email, setEmail] = useState(''); const [name, setName] = useState('');
-            const add = async () => { if(!email || !name) return; await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'managers'), { email, name, role: 'manager', createdAt: serverTimestamp() }); setEmail(''); setName(''); };
-            return (<div className="space-y-4"><div className="flex gap-2"><Input value={name} onChange={e=>setName(e.target.value)} placeholder="Имя" className="flex-1"/><Input value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email" className="flex-1"/><button onClick={add} className="bg-slate-900 text-white px-4 rounded-xl font-bold">+</button></div><div className="space-y-2">{managers.map(m => (<div key={m.id} className="flex justify-between items-center p-3 bg-white border rounded-xl"><div><div className="font-bold text-sm">{m.name}</div><div className="text-xs text-slate-400">{m.email}</div></div><button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'managers', m.id))} className="text-slate-200 hover:text-red-500"><Trash2 size={16}/></button></div>))}</div></div>);
+            const [email, setEmail] = useState(''); 
+            const [name, setName] = useState('');
+            const [password, setPassword] = useState('');
+
+            const add = async () => {
+                if (!email || !name || !password) {
+                    alert("Пожалуйста, заполните все поля: Имя, Email и Пароль.");
+                    return;
+                }
+
+                const tempAppName = `temp-auth-app-${Date.now()}`;
+                const tempApp = initializeApp(firebaseConfig, tempAppName);
+                const tempAuth = getAuth(tempApp);
+
+                try {
+                    const userCredential = await createUserWithEmailAndPassword(tempAuth, email, password);
+                    const newManagerUser = userCredential.user;
+
+                    const managerRef = await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'managers'), {
+                        uid: newManagerUser.uid,
+                        email,
+                        name,
+                        role: 'manager',
+                        createdAt: serverTimestamp()
+                    });
+
+                    await setDoc(doc(db, 'managers_map', email), {
+                        adminId: user.uid,
+                        managerDocId: managerRef.id
+                    });
+                    
+                    await signOut(tempAuth);
+                    
+                    setEmail('');
+                    setName('');
+                    setPassword('');
+                    alert('Менеджер успешно создан!');
+                } catch (error) {
+                    alert(`Ошибка при создании менеджера: ${error.message}`);
+                }
+            };
+
+            const handleDelete = async (manager) => {
+                 if (confirm(`Вы уверены, что хотите удалить менеджера ${manager.name}? Это действие нельзя отменить.`)) {
+                    await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'managers', manager.id));
+                    await deleteDoc(doc(db, 'managers_map', manager.email));
+                 }
+            };
+
+            return (
+                <div className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                        <Input value={name} onChange={e=>setName(e.target.value)} placeholder="Имя" className="flex-1"/>
+                        <Input value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email" className="flex-1"/>
+                        <Input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Пароль" className="flex-1"/>
+                        <button onClick={add} className="bg-slate-900 text-white px-4 py-3 rounded-xl font-bold col-span-1 md:col-span-3 text-xs uppercase tracking-widest">+</button>
+                    </div>
+                    <div className="space-y-2">
+                        {managers.map(m => (
+                            <div key={m.id} className="flex justify-between items-center p-3 bg-white border rounded-xl">
+                                <div>
+                                    <div className="font-bold text-sm">{m.name}</div>
+                                    <div className="text-xs text-slate-400">{m.email}</div>
+                                </div>
+                                <button onClick={() => handleDelete(m)} className="text-slate-200 hover:text-red-500"><Trash2 size={16}/></button>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
         }
+
         function CategoryManager({ user, db, categories }) {
             const [name, setName] = useState(''); const [type, setType] = useState('income');
             const add = async () => { if(!name.trim()) return; await addDoc(collection(db,'artifacts',appId,'users',user.uid,'categories'), { name: name.trim(), type }); setName(''); };
@@ -193,47 +290,146 @@
         }
 
         // --- FORMS ---
-        function ClientForm({ user, db, client, onClose }) {
+        function DealForm({ user, db, stages, clients, onClose, managers, userRole, managerDocId, adminId }) {
+            const [title, setTitle] = useState('');
+            const [value, setValue] = useState('');
+            const [stageId, setStageId] = useState(stages[0]?.id || '');
+            const [clientId, setClientId] = useState('');
+            const [managerId, setManagerId] = useState(managerDocId || (managers[0]?.id || ''));
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                if (!title || !stageId || !adminId) return;
+                const data = { 
+                    title, 
+                    value: Number(value), 
+                    stageId, 
+                    clientId,
+                    managerId,
+                    createdAt: serverTimestamp() 
+                };
+                try {
+                    await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'deals'), data);
+                    onClose();
+                } catch (err) {
+                    alert(err.message);
+                }
+            };
+
+            return (
+                <form onSubmit={handleSubmit} className="p-8 space-y-6">
+                    <h2 className="text-2xl font-bold text-gray-900 tracking-tight uppercase mb-2">Новый проект</h2>
+                    <Input label="Название проекта *" required value={title} onChange={e => setTitle(e.target.value)} />
+                    <Input label="Бюджет" type="number" value={value} onChange={e => setValue(e.target.value)} />
+                    <Select label="Этап *" value={stageId} onChange={e => setStageId(e.target.value)}>
+                        {stages.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </Select>
+                    <Select label="Клиент" value={clientId} onChange={e => setClientId(e.target.value)}>
+                        <option value="">-- Выбрать клиента --</option>
+                        {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </Select>
+                    {userRole === 'admin' && (
+                        <Select label="Менеджер" value={managerId} onChange={e => setManagerId(e.target.value)}>
+                            {managers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                        </Select>
+                    )}
+                    <PrimaryBtn type="submit" className="w-full py-4 uppercase font-black text-xs tracking-widest">Создать проект</PrimaryBtn>
+                </form>
+            );
+        }
+
+        function ClientForm({ user, db, client, onClose, managers, userRole, managerDocId, adminId }) {
             const [name, setName] = useState(client?.name || ''); const [phone, setPhone] = useState(client?.phone || ''); const [email, setEmail] = useState(client?.email || ''); const [notes, setNotes] = useState(client?.notes || '');
             const [code, setCode] = useState(client?.code || Math.floor(1000 + Math.random() * 9000).toString());
-            const handleSubmit = async (e) => { e.preventDefault(); if (!name || !user) return; const data = { name, phone, email, notes, code }; const collRef = collection(db, 'artifacts', appId, 'users', user.uid, 'clients'); try { if (client) await updateDoc(doc(collRef, client.id), data); else await addDoc(collRef, data); onClose(); } catch (err) { alert(err.message); } };
-            return (<form onSubmit={handleSubmit} className="p-8 space-y-4"><h2 className="text-2xl font-bold text-gray-900 tracking-tight uppercase mb-2">{client ? 'Редактировать' : 'Новый клиент'}</h2><div className="bg-blue-50 p-4 rounded-xl text-center border border-blue-100"><Label>Код доступа клиента</Label><div className="text-3xl font-black text-blue-600">{code}</div></div><Input label="Имя / Компания *" required value={name} onChange={e=>setName(e.target.value)} /><Input label="Телефон" value={phone} onChange={e=>setPhone(e.target.value)} /><Input label="Email" value={email} onChange={e=>setEmail(e.target.value)} /><div><Label>Заметки</Label><textarea value={notes} onChange={e=>setNotes(e.target.value)} className="w-full border border-gray-200 rounded-xl p-2.5 outline-none min-h-[100px]"></textarea></div><PrimaryBtn className="w-full py-4 uppercase font-black text-xs tracking-widest hover:bg-black transition-all">Сохранить клиента</PrimaryBtn></form>);
+            const [managerId, setManagerId] = useState(managerDocId || client?.managerId || (managers[0]?.id || ''));
+            
+            const handleSubmit = async (e) => { 
+                e.preventDefault(); 
+                if (!name || !adminId) return; 
+                const data = { name, phone, email, notes, code, managerId }; 
+                const collRef = collection(db, 'artifacts', appId, 'users', adminId, 'clients'); 
+                try { 
+                    if (client) await updateDoc(doc(collRef, client.id), data); 
+                    else await addDoc(collRef, data); 
+                    onClose(); 
+                } catch (err) { alert(err.message); } 
+            };
+
+            return (
+            <form onSubmit={handleSubmit} className="p-8 space-y-4">
+                <h2 className="text-2xl font-bold text-gray-900 tracking-tight uppercase mb-2">{client ? 'Редактировать' : 'Новый клиент'}</h2>
+                <div className="bg-blue-50 p-4 rounded-xl text-center border border-blue-100">
+                    <Label>Код доступа клиента</Label>
+                    <div className="text-3xl font-black text-blue-600">{code}</div>
+                </div>
+                <Input label="Имя / Компания *" required value={name} onChange={e=>setName(e.target.value)} />
+                <Input label="Телефон" value={phone} onChange={e=>setPhone(e.target.value)} />
+                <Input label="Email" value={email} onChange={e=>setEmail(e.target.value)} />
+                {userRole === 'admin' && (
+                        <Select label="Менеджер" value={managerId} onChange={e => setManagerId(e.target.value)}>
+                            {managers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                        </Select>
+                    )}
+                <div>
+                    <Label>Заметки</Label>
+                    <textarea value={notes} onChange={e=>setNotes(e.target.value)} className="w-full border border-gray-200 rounded-xl p-2.5 outline-none min-h-[100px]"></textarea>
+                </div>
+                <PrimaryBtn className="w-full py-4 uppercase font-black text-xs tracking-widest hover:bg-black transition-all">Сохранить клиента</PrimaryBtn>
+            </form>);
         }
-        function TransactionForm({ user, db, categories, accounts, deals, onClose, editingTx }) {
+
+        function TransactionForm({ user, db, categories, accounts, deals, onClose, editingTx, managers, userRole, managerDocId, adminId }) {
             const [type, setType] = useState(editingTx?.type || 'income'); const [status, setStatus] = useState(editingTx?.status || 'fact'); 
             const [amount, setAmount] = useState(editingTx?.amount || ''); const [categoryId, setCategoryId] = useState(editingTx?.categoryId || ''); const [accountId, setAccountId] = useState(editingTx?.accountId || ''); 
             const [dealId, setDealId] = useState(editingTx?.dealId || ''); const [description, setDescription] = useState(editingTx?.description || ''); const [date, setDate] = useState(editingTx?.date || new Date().toISOString().split('T')[0]);
+            const [managerId, setManagerId] = useState(managerDocId || editingTx?.managerId || (managers[0]?.id || ''));
+
             const filteredCats = categories.filter(c => c.type === type || !c.type);
-            const handleSubmit = async (e) => { e.preventDefault(); if (!amount || !categoryId || !accountId || !user) return; const data = { type, status, amount: Number(amount), categoryId, accountId, dealId: dealId || null, description, date }; try { if(editingTx) await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'transactions', editingTx.id), data); else await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'transactions'), { ...data, createdAt: serverTimestamp() }); onClose(); } catch (err) {} };
-            return (<form onSubmit={handleSubmit} className="p-8 space-y-6"><h2 className="text-2xl font-bold text-gray-900 tracking-tight uppercase mb-2">{editingTx ? 'Редактировать' : 'Новая операция'}</h2><div className="flex bg-slate-50 p-1.5 rounded-2xl"><button type="button" onClick={()=>setType('income')} className={`flex-1 py-2.5 text-xs font-black uppercase rounded-xl transition-all ${type==='income'?'bg-white shadow text-emerald-600':'text-slate-400'}`}>Доход</button><button type="button" onClick={()=>setType('expense')} className={`flex-1 py-2.5 text-xs font-black uppercase rounded-xl transition-all ${type==='expense'?'bg-white shadow text-red-600':'text-slate-400'}`}>Расход</button></div><div className="flex bg-slate-50 p-1.5 rounded-2xl"><button type="button" onClick={()=>setStatus('fact')} className={`flex-1 py-2.5 text-xs font-black uppercase tracking-widest rounded-xl transition-all ${status==='fact'?'bg-slate-900 text-white shadow':'text-slate-400'}`}>Факт</button><button type="button" onClick={()=>setStatus('plan')} className={`flex-1 py-2.5 text-xs font-black uppercase tracking-widest rounded-xl transition-all ${status==='plan'?'bg-white shadow text-blue-600':'text-slate-400'}`}>План</button></div><div className="grid grid-cols-2 gap-4"><Input label="Сумма (₽) *" type="number" required value={amount} onChange={e=>setAmount(e.target.value)} /><Input label="Дата" type="date" required value={date} onChange={e=>setDate(e.target.value)} /></div><div className="grid grid-cols-2 gap-4"><Select label="Счет *" value={accountId} onChange={e=>setAccountId(e.target.value)}><option value="">Выбрать счет</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</Select><Select label="Категория *" value={categoryId} onChange={e=>setCategoryId(e.target.value)}><option value="">Выбрать категорию</option>{filteredCats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select></div><Select label="Привязать к сделке" value={dealId} onChange={e=>setDealId(e.target.value)}><option value="">-- Нет --</option>{deals.map(d=><option key={d.id} value={d.id}>{d.title}</option>)}</Select><Input label="Описание" value={description} onChange={e=>setDescription(e.target.value)} /><button type="submit" className={`w-full py-5 text-white rounded-3xl font-black uppercase tracking-widest text-xs transition-all shadow-lg hover:shadow-xl ${type==='income'?'bg-emerald-600 hover:bg-emerald-700':'bg-red-600 hover:bg-red-700'}`}>{editingTx ? 'Сохранить изменения' : 'Записать'}</button></form>);
+            const handleSubmit = async (e) => { 
+                e.preventDefault(); 
+                if (!amount || !categoryId || !accountId || !adminId) return; 
+                const data = { type, status, amount: Number(amount), categoryId, accountId, dealId: dealId || null, description, date, managerId }; 
+                try { 
+                    if(editingTx) await updateDoc(doc(db, 'artifacts', appId, 'users', adminId, 'transactions', editingTx.id), data); 
+                    else await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'transactions'), { ...data, createdAt: serverTimestamp() }); 
+                    onClose(); 
+                } catch (err) {} 
+            };
+            return (<form onSubmit={handleSubmit} className="p-8 space-y-6"><h2 className="text-2xl font-bold text-gray-900 tracking-tight uppercase mb-2">{editingTx ? 'Редактировать' : 'Новая операция'}</h2><div className="flex bg-slate-50 p-1.5 rounded-2xl"><button type="button" onClick={()=>setType('income')} className={`flex-1 py-2.5 text-xs font-black uppercase rounded-xl transition-all ${type==='income'?'bg-white shadow text-emerald-600':'text-slate-400'}`}>Доход</button><button type="button" onClick={()=>setType('expense')} className={`flex-1 py-2.5 text-xs font-black uppercase rounded-xl transition-all ${type==='expense'?'bg-white shadow text-red-600':'text-slate-400'}`}>Расход</button></div><div className="flex bg-slate-50 p-1.5 rounded-2xl"><button type="button" onClick={()=>setStatus('fact')} className={`flex-1 py-2.5 text-xs font-black uppercase tracking-widest rounded-xl transition-all ${status==='fact'?'bg-slate-900 text-white shadow':'text-slate-400'}`}>Факт</button><button type="button" onClick={()=>setStatus('plan')} className={`flex-1 py-2.5 text-xs font-black uppercase tracking-widest rounded-xl transition-all ${status==='plan'?'bg-white shadow text-blue-600':'text-slate-400'}`}>План</button></div><div className="grid grid-cols-2 gap-4"><Input label="Сумма (₽) *" type="number" required value={amount} onChange={e=>setAmount(e.target.value)} /><Input label="Дата" type="date" required value={date} onChange={e=>setDate(e.target.value)} /></div><div className="grid grid-cols-2 gap-4"><Select label="Счет *" value={accountId} onChange={e=>setAccountId(e.target.value)}><option value="">Выбрать счет</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</Select><Select label="Категория *" value={categoryId} onChange={e=>setCategoryId(e.target.value)}><option value="">Выбрать категорию</option>{filteredCats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select></div><Select label="Привязать к сделке" value={dealId} onChange={e=>setDealId(e.target.value)}><option value="">-- Нет --</option>{deals.map(d=><option key={d.id} value={d.id}>{d.title}</option>)}</Select>
+                {userRole === 'admin' && (
+                        <Select label="Менеджер" value={managerId} onChange={e => setManagerId(e.target.value)}>
+                            {managers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                        </Select>
+                    )}
+                <Input label="Описание" value={description} onChange={e=>setDescription(e.target.value)} /><button type="submit" className={`w-full py-5 text-white rounded-3xl font-black uppercase tracking-widest text-xs transition-all shadow-lg hover:shadow-xl ${type==='income'?'bg-emerald-600 hover:bg-emerald-700':'bg-red-600 hover:bg-red-700'}`}>{editingTx ? 'Сохранить изменения' : 'Записать'}</button></form>);
         }
 
         // --- 5. TABS & DEAL CARD ---
-        function DealCommentsTab({ user, db, deal }) {
+        function DealCommentsTab({ user, db, deal, adminId }) {
             const [text, setText] = useState(''); const [comments, setComments] = useState([]);
-            useEffect(() => { const q = collection(db, 'artifacts', appId, 'users', user.uid, 'deals', deal.id, 'comments'); return onSnapshot(q, snap => setComments(snap.docs.map(d => ({id:d.id, ...d.data()})).sort((a,b) => (a.createdAt?.toDate() || 0) - (b.createdAt?.toDate() || 0)))); }, [deal.id]);
-            const send = async () => { if (!text.trim()) return; await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'deals', deal.id, 'comments'), { text, author: user.email || 'Менеджер', createdAt: serverTimestamp() }); setText(''); };
+            useEffect(() => { if(!adminId) return; const q = collection(db, 'artifacts', appId, 'users', adminId, 'deals', deal.id, 'comments'); return onSnapshot(q, snap => setComments(snap.docs.map(d => ({id:d.id, ...d.data()})).sort((a,b) => (a.createdAt?.toDate() || 0) - (b.createdAt?.toDate() || 0)))); }, [deal.id, adminId]);
+            const send = async () => { if (!text.trim() || !adminId) return; await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'deals', deal.id, 'comments'), { text, author: user.email || 'Менеджер', createdAt: serverTimestamp() }); setText(''); };
             return (<div className="flex flex-col h-full min-h-[400px]"><div className="flex-1 space-y-4 overflow-y-auto no-scrollbar pb-24">{comments.length === 0 ? <p className="text-center text-slate-300 py-10 uppercase text-[10px] font-bold">История пуста</p> : comments.map(c => (<div key={c.id} className="flex gap-3 bg-slate-50 p-3 rounded-2xl"><div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center shrink-0"><User size={14}/></div><div className="flex-1"><div className="text-[10px] font-bold text-blue-600 mb-1 uppercase">{c.author}</div><div className="text-sm">{c.text}</div></div></div>))}</div><div className="absolute bottom-0 left-0 right-0 p-6 bg-white border-t flex gap-2"><input value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()} className="flex-1 bg-slate-100 p-3 rounded-xl outline-none text-sm" placeholder="Написать..." /><button onClick={send} className="bg-blue-600 text-white p-3 rounded-xl"><Send size={18}/></button></div></div>);
         }
 
-        function DealTasksTab({ user, db, deal, tasks, toggleTask }) {
+        function DealTasksTab({ user, db, deal, tasks, toggleTask, adminId }) {
             const [title, setTitle] = useState('');
-            const handleAdd = async (e) => { e.preventDefault(); if(!title.trim()) return; await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'tasks'), { title: title.trim(), dealId: deal.id, isCompleted: false, createdAt: serverTimestamp() }); setTitle(''); };
-            return (<div className="space-y-6"><form onSubmit={handleAdd} className="flex gap-2 items-center"><Input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Что нужно сделать?" className="bg-slate-50 border-none" /><button type="submit" className="bg-blue-600 text-white w-12 h-[48px] rounded-xl font-bold shadow-lg transition-all hover:bg-blue-700 shrink-0">+</button></form><div className="space-y-2">{tasks.map(t=>(<div key={t.id} className="flex items-center gap-3 p-4 bg-white border rounded-xl hover:shadow-md transition-all"><button onClick={()=>toggleTask(t)} className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${t.isCompleted?'bg-blue-500 border-blue-500':'border-slate-200 hover:border-blue-400'}`}>{t.isCompleted && <Check size={12} className="text-white"/>}</button><div className={`flex-1 text-sm font-medium ${t.isCompleted ? 'line-through text-slate-300':'text-slate-800'}`}>{t.title}</div><button onClick={()=>deleteDoc(doc(db,'artifacts',appId,'users',user.uid,'tasks',t.id))} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"><Trash2 size={16}/></button></div>))}</div></div>);
+            const handleAdd = async (e) => { e.preventDefault(); if(!title.trim()||!adminId) return; await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'tasks'), { title: title.trim(), dealId: deal.id, isCompleted: false, createdAt: serverTimestamp() }); setTitle(''); };
+            return (<div className="space-y-6"><form onSubmit={handleAdd} className="flex gap-2 items-center"><Input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Что нужно сделать?" className="bg-slate-50 border-none" /><button type="submit" className="bg-blue-600 text-white w-12 h-[48px] rounded-xl font-bold shadow-lg transition-all hover:bg-blue-700 shrink-0">+</button></form><div className="space-y-2">{tasks.map(t=>(<div key={t.id} className="flex items-center gap-3 p-4 bg-white border rounded-xl hover:shadow-md transition-all group"><button onClick={()=>toggleTask(t)} className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${t.isCompleted?'bg-blue-500 border-blue-500':'border-slate-200 hover:border-blue-400'}`}>{t.isCompleted && <Check size={12} className="text-white"/>}</button><div className={`flex-1 text-sm font-medium ${t.isCompleted ? 'line-through text-slate-300':'text-slate-800'}`}>{t.title}</div><button onClick={()=>deleteDoc(doc(db,'artifacts',appId,'users',adminId,'tasks',t.id))} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"><Trash2 size={16}/></button></div>))}</div></div>);
         }
 
-        function DealFinancesTab({ user, db, deal, transactions, accounts, deleteTx }) {
+        function DealFinancesTab({ user, db, deal, transactions, accounts, deleteTx, adminId }) {
             const [amount, setAmt] = useState(''); const [accountId, setAcc] = useState('');
             const projectTx = transactions.filter(t => t.dealId === deal.id);
             const profit = projectTx.filter(t=>t.type==='income'&&t.status==='fact').reduce((s,t)=>s+Number(t.amount), 0) - projectTx.filter(t=>t.type==='expense'&&t.status==='fact').reduce((s,t)=>s+Number(t.amount), 0);
-            const handleAdd = async (type) => { if(!amount || !accountId) return; await addDoc(collection(db,'artifacts',appId,'users',user.uid,'transactions'), { type, amount: Number(amount), accountId, dealId: deal.id, date: new Date().toISOString().split('T')[0], status: 'fact', createdAt: serverTimestamp() }); setAmt(''); };
+            const handleAdd = async (type) => { if(!amount || !accountId || !adminId) return; await addDoc(collection(db,'artifacts',appId,'users',adminId,'transactions'), { type, amount: Number(amount), accountId, dealId: deal.id, date: new Date().toISOString().split('T')[0], status: 'fact', createdAt: serverTimestamp() }); setAmt(''); };
             return (<div className="space-y-6"><div className="grid grid-cols-2 gap-4"><div className="bg-slate-50 p-4 rounded-2xl border"><Label>Бюджет проекта</Label><div className="text-xl font-black">{Number(deal.value).toLocaleString()} ₽</div></div><div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100"><Label>Прибыль (Факт)</Label><div className="text-xl font-black text-emerald-700">{profit.toLocaleString()} ₽</div></div></div><div className="p-4 bg-slate-50 rounded-2xl space-y-3"><Input placeholder="Сумма" type="number" value={amount} onChange={e=>setAmt(e.target.value)} /><Select value={accountId} onChange={e=>setAcc(e.target.value)}><option value="">Выберите счет...</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</Select><div className="grid grid-cols-2 gap-2"><button onClick={()=>handleAdd('income')} className="bg-emerald-600 text-white py-3 rounded-xl font-bold text-xs uppercase">Доход</button><button onClick={()=>handleAdd('expense')} className="bg-red-600 text-white py-3 rounded-xl font-bold text-xs uppercase">Расход</button></div></div><div className="space-y-2">{projectTx.map(tx => (<div key={tx.id} className="flex justify-between items-center p-3 border-b"><div><div className="text-xs font-bold">{accounts.find(a=>a.id===tx.accountId)?.name || 'Счет'}</div><div className="text-[10px] text-slate-400">{tx.date}</div></div><div className="flex items-center gap-3"><span className={`font-black text-sm ${tx.type==='income'?'text-emerald-500':'text-rose-500'}`}>{Number(tx.amount).toLocaleString()} ₽</span><button onClick={()=>deleteTx(tx.id)} className="text-slate-200 hover:text-red-500 transition-colors"><Trash2 size={14}/></button></div></div>))}</div></div>);
         }
 
         // --- 6. CORE VIEWS ---
-        function DealManager({ user, db, deal, stages, clients, tasks, transactions, categories, accounts, customFields, onClose, toggleTask, deleteDeal, onAddClient, deleteTx }) {
-            const [activeTab, setActiveTab] = useState('comments');
-            if (!deal) return <DealForm user={user} db={db} stages={stages} clients={clients} onClose={onClose} />;
+        function DealManager({ user, db, deal, stages, clients, tasks, transactions, categories, accounts, customFields, onClose, toggleTask, deleteDeal, onAddClient, deleteTx, managers, userRole, managerDocId, adminId }) {
+            const [activeTab, setActiveTab] = useState('история');
+            if (!deal) return <DealForm user={user} db={db} stages={stages} clients={clients} onClose={onClose} managers={managers} userRole={userRole} managerDocId={managerDocId} adminId={adminId} />;
             
             const client = clients.find(c => c.id === deal.clientId);
             const clientName = client ? client.name : "Нет данных";
@@ -244,26 +440,27 @@
                 <div className="flex h-[90vh] bg-white flex-col md:flex-row overflow-hidden relative selection:bg-blue-100">
                     <button onClick={onClose} className="absolute top-4 right-4 z-50 p-2 hover:bg-gray-100 rounded-full transition-colors"><X className="w-5 h-5 text-gray-400" /></button>
                     <div className="w-full md:w-[45%] border-r border-slate-100 p-10 flex flex-col space-y-8 overflow-y-auto no-scrollbar bg-slate-50/20">
-                        <div><h1 className="text-3xl font-black text-slate-900 leading-tight mb-2">{deal.title}</h1><div className="flex gap-1.5 mb-6">{stages.map((s, i) => (<div key={s.id} onClick={() => updateDoc(doc(db,'artifacts',appId,'users',user.uid,'deals',deal.id), {stageId:s.id})} className={`step-segment ${i < stageIndex ? 'completed' : i === stageIndex ? 'active' : ''}`} />))}</div></div>
-                        <div><Label>Бюджет</Label><input type="number" defaultValue={deal.value} onBlur={(e) => updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'deals', deal.id), {value:Number(e.target.value)})} className="text-3xl font-black bg-transparent outline-none w-full" /></div>
-                        <div className="pt-4 border-t border-slate-100"><Label>Контакты</Label>{client ? <div className="flex items-center gap-4 mt-2 p-4 bg-white border rounded-2xl shadow-sm hover:border-blue-200 transition-all"><div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 font-black uppercase shadow-inner">{clientName[0]}</div><div className="flex-1"><div className="font-black text-sm text-slate-900">{clientName}</div><div className="text-xs font-bold text-blue-500 opacity-80">{clientPhone}</div></div><select className="bg-transparent text-[10px] uppercase font-bold text-slate-400 outline-none text-right cursor-pointer hover:text-blue-600" value={client.id} onChange={(e) => updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'deals', deal.id), { clientId: e.target.value })}><option value={client.id}>Сменить</option>{clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div> : <div onClick={onAddClient} className="mt-2 p-4 border-2 border-dashed rounded-2xl text-center text-slate-400 cursor-pointer hover:bg-white transition-all text-xs font-bold flex items-center justify-center gap-2"><Plus size={16}/> Привязать клиента</div>}</div>
-                        <div className="space-y-6 pt-2">{customFields && customFields.map(f => (<div key={f.id} className="group"><label className="text-[10px] font-black uppercase tracking-widest text-slate-400 group-hover:text-blue-600 transition-colors mb-1 block">{f.name}</label><input defaultValue={deal.customData?.[f.id] || ''} onBlur={(e) => updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'deals', deal.id), { [`customData.${f.id}`]: e.target.value })} className="w-full bg-transparent border-b border-transparent hover:border-slate-200 focus:border-blue-500 outline-none py-1 text-sm font-semibold text-slate-700" placeholder="Не заполнено" /></div>))}</div>
+                        <div><h1 className="text-3xl font-black text-slate-900 leading-tight mb-2">{deal.title}</h1><div className="flex gap-1.5 mb-6">{stages.map((s, i) => (<div key={s.id} onClick={() => updateDoc(doc(db,'artifacts',appId,'users',adminId,'deals',deal.id), {stageId:s.id})} className={`step-segment ${i < stageIndex ? 'completed' : i === stageIndex ? 'active' : ''}`} />))}</div></div>
+                        <div><Label>Бюджет</Label><input type="number" defaultValue={deal.value} onBlur={(e) => updateDoc(doc(db, 'artifacts', appId, 'users', adminId, 'deals', deal.id), {value:Number(e.target.value)})} className="text-3xl font-black bg-transparent outline-none w-full" /></div>
+                        <div className="pt-4 border-t border-slate-100"><Label>Контакты</Label>{client ? <div className="flex items-center gap-4 mt-2 p-4 bg-white border rounded-2xl shadow-sm hover:border-blue-200 transition-all"><div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 font-black uppercase shadow-inner">{clientName[0]}</div><div className="flex-1"><div className="font-black text-sm text-slate-900">{clientName}</div><div className="text-xs font-bold text-blue-500 opacity-80">{clientPhone}</div></div><select className="bg-transparent text-[10px] uppercase font-bold text-slate-400 outline-none text-right cursor-pointer hover:text-blue-600" value={client.id} onChange={(e) => updateDoc(doc(db, 'artifacts', appId, 'users', adminId, 'deals', deal.id), { clientId: e.target.value })}><option value={client.id}>Сменить</option>{clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div> : <div onClick={onAddClient} className="mt-2 p-4 border-2 border-dashed rounded-2xl text-center text-slate-400 cursor-pointer hover:bg-white transition-all text-xs font-bold flex items-center justify-center gap-2"><Plus size={16}/> Привязать клиента</div>}</div>
+                        <div className="space-y-6 pt-2">{customFields && customFields.map(f => (<div key={f.id} className="group"><label className="text-[10px] font-black uppercase tracking-widest text-slate-400 group-hover:text-blue-600 transition-colors mb-1 block">{f.name}</label><input defaultValue={deal.customData?.[f.id] || ''} onBlur={(e) => updateDoc(doc(db, 'artifacts', appId, 'users', adminId, 'deals', deal.id), { [`customData.${f.id}`]: e.target.value })} className="w-full bg-transparent border-b border-transparent hover:border-slate-200 focus:border-blue-500 outline-none py-1 text-sm font-semibold text-slate-700" placeholder="Не заполнено" /></div>))}</div>
                         <div className="pt-4"><button onClick={()=>deleteDeal(deal.id)} className="text-red-400 text-[10px] font-black uppercase hover:text-red-600 flex items-center gap-1"><Trash2 size={12}/> Удалить проект</button></div>
                     </div>
                     <div className="flex-1 flex flex-col bg-white relative">
-                        <div className="flex border-b border-slate-100 px-10 shrink-0"><button onClick={() => setActiveTab('comments')} className={`py-6 text-[10px] font-black uppercase mr-8 border-b-2 transition-all ${activeTab==='comments'?'border-blue-600 text-blue-600':'border-transparent text-slate-300'}`}>История</button><button onClick={() => setActiveTab('tasks')} className={`py-6 text-[10px] font-black uppercase mr-8 border-b-2 transition-all ${activeTab==='tasks'?'border-blue-600 text-blue-600':'border-transparent text-slate-300'}`}>Задачи</button><button onClick={() => setActiveTab('finances')} className={`py-6 text-[10px] font-black uppercase border-b-2 transition-all ${activeTab==='finances'?'border-blue-600 text-blue-600':'border-transparent text-slate-300'}`}>Финансы</button></div>
+                        <div className="flex border-b border-slate-100 px-10 shrink-0"><button onClick={() => setActiveTab('история')} className={`py-6 text-[10px] font-black uppercase mr-8 border-b-2 transition-all ${activeTab==='история'?'border-blue-600 text-blue-600':'border-transparent text-slate-300'}`}>История</button><button onClick={() => setActiveTab('задачи')} className={`py-6 text-[10px] font-black uppercase mr-8 border-b-2 transition-all ${activeTab==='задачи'?'border-blue-600 text-blue-600':'border-transparent text-slate-300'}`}>Задачи</button><button onClick={() => setActiveTab('финансы')} className={`py-6 text-[10px] font-black uppercase border-b-2 transition-all ${activeTab==='финансы'?'border-blue-600 text-blue-600':'border-transparent text-slate-300'}`}>Финансы</button></div>
                         <div className="flex-1 overflow-y-auto p-10 relative">
-                            {activeTab === 'comments' && <DealCommentsTab user={user} db={db} deal={deal} />}
-                            {activeTab === 'tasks' && <DealTasksTab user={user} db={db} deal={deal} tasks={tasks.filter(t=>t.dealId===deal.id)} toggleTask={toggleTask} />}
-                            {activeTab === 'finances' && <DealFinancesTab user={user} db={db} deal={deal} transactions={transactions} categories={categories} accounts={accounts} deleteTx={deleteTx} />}
+                            {activeTab === 'история' && <DealCommentsTab user={user} db={db} deal={deal} adminId={adminId} />}
+                            {activeTab === 'задачи' && <DealTasksTab user={user} db={db} deal={deal} tasks={tasks.filter(t=>t.dealId===deal.id)} toggleTask={toggleTask} adminId={adminId} />}
+                            {activeTab === 'финансы' && <DealFinancesTab user={user} db={db} deal={deal} transactions={transactions} categories={categories} accounts={accounts} deleteTx={deleteTx} adminId={adminId} />}
                         </div>
                     </div>
                 </div>
             );
         }
 
-        function KanbanView({ stages, deals, clients, setEditingDeal, setIsDealModalOpen }) {
+        function KanbanView({ stages, deals, clients, setEditingDeal, setIsDealModalOpen, managers, userRole }) {
             const getClientName = (id) => { const c = clients.find(c => c.id === id); return c ? c.name : 'Без клиента'; };
+            const getManagerName = (id) => { const m = managers.find(m => m.id === id); return m ? m.name : 'Не назначен'; };
             return (
                 <div className="kanban-scroll flex h-full space-x-6 overflow-x-auto pb-6 items-start">
                     {stages.map(stage => {
@@ -274,7 +471,12 @@
                                 <div className="flex justify-between items-center mb-3 px-4 pt-3 shrink-0"><h3 className="font-bold text-slate-900 text-[10px] uppercase tracking-widest opacity-40">{stage.name}</h3><span className="text-slate-400 font-black text-[10px] bg-white px-2 py-0.5 rounded-full">{stageTotal.toLocaleString()} ₽</span></div>
                                 <div className="flex-1 overflow-y-auto space-y-3 p-1 min-h-[150px] no-scrollbar">
                                     {stageDeals.map(deal => (
-                                        <div key={deal.id} onClick={() => { setEditingDeal(deal); setIsDealModalOpen(true); }} className="bg-white p-6 rounded-[28px] shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer group ring-1 ring-black/[0.03] border border-transparent hover:border-blue-100"><h4 className="font-black text-slate-800 leading-tight mb-2 text-sm">{deal.title}</h4><div className="text-[10px] font-black text-blue-500 uppercase tracking-widest mb-3 opacity-60">{getClientName(deal.clientId)}</div><div className="font-black text-slate-900 text-xs">{Number(deal.value||0).toLocaleString()} ₽</div></div>
+                                        <div key={deal.id} onClick={() => { setEditingDeal(deal); setIsDealModalOpen(true); }} className="bg-white p-6 rounded-[28px] shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer group ring-1 ring-black/[0.03] border border-transparent hover:border-blue-100">
+                                            <h4 className="font-black text-slate-800 leading-tight mb-2 text-sm">{deal.title}</h4>
+                                            <div className="text-[10px] font-black text-blue-500 uppercase tracking-widest mb-3 opacity-60">{getClientName(deal.clientId)}</div>
+                                            {userRole === 'admin' && <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">{getManagerName(deal.managerId)}</div>}
+                                            <div className="font-black text-slate-900 text-xs">{Number(deal.value||0).toLocaleString()} ₽</div>
+                                        </div>
                                     ))}
                                     <button onClick={() => { setEditingDeal(null); setIsDealModalOpen(true); }} className="w-full py-5 rounded-[24px] border-2 border-dashed border-slate-200 text-slate-300 hover:border-blue-400 hover:text-blue-500 transition-all text-[10px] font-black uppercase">Добавить проект</button>
                                 </div>
@@ -285,20 +487,53 @@
             );
         }
 
-        function ClientsView({ clients, setEditingClient, setIsClientModalOpen }) {
+        function ClientsView({ clients, setEditingClient, setIsClientModalOpen, deleteClient, managers, userRole }) {
+            const getManagerName = (id) => { const m = managers.find(m => m.id === id); return m ? m.name : 'Не назначен'; };
+
             return (
                 <div className="glass-panel rounded-[32px] shadow-sm border border-white/50 overflow-hidden flex flex-col h-full animate-in fade-in">
-                    <div className="p-6 border-b border-gray-100 bg-white/50 backdrop-blur-sm flex justify-between items-center"><h2 className="text-xl font-black text-slate-900 tracking-tighter uppercase">База клиентов</h2><PrimaryBtn onClick={()=>{setEditingClient(null); setIsClientModalOpen(true);}} className="px-6 py-3 text-xs bg-blue-600 hover:bg-blue-700 shadow-blue-200"><Plus size={16}/> Добавить</PrimaryBtn></div>
-                    <div className="flex-1 overflow-auto"><table className="w-full text-left"><thead className="bg-gray-50/50 text-gray-400 text-[10px] uppercase tracking-widest font-black border-b sticky top-0"><tr><th className="p-6">Клиент</th><th className="p-6">Телефон</th><th className="p-6">Код Доступа</th><th className="p-6 text-right"></th></tr></thead><tbody className="divide-y divide-gray-100 bg-white/40">{clients.map(c => (<tr key={c.id} className="hover:bg-white/80 transition-colors group cursor-pointer" onClick={() => { setEditingClient(c); setIsClientModalOpen(true); }}><td className="p-6 font-bold text-gray-900">{c.name}</td><td className="p-6 text-sm font-medium">{c.phone}</td><td className="p-6 text-xs font-black text-blue-600">{c.code}</td><td className="p-6 text-right group-hover:text-blue-600 uppercase font-black text-[10px]">Ред.</td></tr>))}</tbody></table>{clients.length === 0 && <div className="p-20 text-center text-gray-300 font-black uppercase tracking-widest text-[10px]">Список пуст</div>}</div>
+                    <div className="p-6 border-b border-gray-100 bg-white/50 backdrop-blur-sm flex justify-between items-center">
+                        <h2 className="text-xl font-black text-slate-900 tracking-tighter uppercase">База клиентов</h2>
+                        <PrimaryBtn onClick={() => { setEditingClient(null); setIsClientModalOpen(true); }} className="px-6 py-3 text-xs bg-blue-600 hover:bg-blue-700 shadow-blue-200"><Plus size={16}/> Добавить</PrimaryBtn>
+                    </div>
+                    <div className="flex-1 overflow-auto">
+                        <table className="w-full text-left">
+                            <thead className="bg-gray-50/50 text-gray-400 text-[10px] uppercase tracking-widest font-black border-b sticky top-0">
+                                <tr>
+                                    <th className="p-6">Клиент</th>
+                                    <th className="p-6">Телефон</th>
+                                    <th className="p-6">Код Доступа</th>
+                                    {userRole === 'admin' && <th className="p-6">Менеджер</th>}
+                                    <th className="p-6 text-right"></th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100 bg-white/40">
+                                {clients.map(c => (
+                                    <tr key={c.id} className="hover:bg-white/80 transition-colors group">
+                                        <td className="p-6 font-bold text-gray-900 cursor-pointer" onClick={() => { setEditingClient(c); setIsClientModalOpen(true); }}>{c.name}</td>
+                                        <td className="p-6 text-sm font-medium cursor-pointer" onClick={() => { setEditingClient(c); setIsClientModalOpen(true); }}>{c.phone}</td>
+                                        <td className="p-6 text-xs font-black text-blue-600 cursor-pointer" onClick={() => { setEditingClient(c); setIsClientModalOpen(true); }}>{c.code}</td>
+                                        {userRole === 'admin' && <td className="p-6 text-sm font-medium">{getManagerName(c.managerId)}</td>}
+                                        <td className="p-6 text-right">
+                                            <button onClick={() => deleteClient(c.id)} className="text-red-500 opacity-0 group-hover:opacity-100">
+                                                <Trash2 size={16} />
+                                            </button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                        {clients.length === 0 && <div className="p-20 text-center text-gray-300 font-black uppercase tracking-widest text-[10px]">Список пуст</div>}
+                    </div>
                 </div>
             );
         }
 
-        function TasksView({ tasks, toggleTask, deleteDoc, user, appId, db }) {
+        function TasksView({ tasks, toggleTask, deleteDoc, user, appId, db, adminId }) {
             const [newTaskTitle, setNewTaskTitle] = useState('');
             const handleAddTask = async (e) => {
-                e.preventDefault(); if (!newTaskTitle.trim()) return;
-                await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'tasks'), { title: newTaskTitle, isCompleted: false, createdAt: serverTimestamp(), dealId: null });
+                e.preventDefault(); if (!newTaskTitle.trim()||!adminId) return;
+                await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'tasks'), { title: newTaskTitle, isCompleted: false, createdAt: serverTimestamp(), dealId: null });
                 setNewTaskTitle('');
             };
             return (
@@ -310,7 +545,7 @@
                             <div key={t.id} className="flex items-center gap-4 p-4 bg-white border border-gray-100 rounded-2xl hover:shadow-md transition-all group">
                                 <button onClick={()=>toggleTask(t)} className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${t.isCompleted?'bg-blue-500 border-blue-500':'border-slate-300'}`}>{t.isCompleted && <Check size={14} className="text-white"/>}</button>
                                 <div className={`flex-1 font-medium ${t.isCompleted?'line-through text-slate-400':'text-slate-800'}`}>{t.title}</div>
-                                <button onClick={()=>deleteDoc(doc(db,'artifacts',appId,'users',user.uid,'tasks',t.id))} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"><Trash2 size={18}/></button>
+                                <button onClick={()=>deleteDoc(doc(db,'artifacts',appId,'users',adminId,'tasks',t.id))} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"><Trash2 size={18}/></button>
                             </div>
                         ))}
                         {tasks.length === 0 && <div className="text-center py-20 text-slate-300 font-bold uppercase text-xs">Нет задач</div>}
@@ -319,7 +554,8 @@
             );
         }
 
-        function FinancesView({ totalBalance, catBalances, transactions, categories, deleteTx, aiAnalysis, aiLoading, handleAiAnalysis, accounts, setEditingTx, setIsTxModalOpen }) {
+        function FinancesView({ totalBalance, catBalances, transactions, categories, deleteTx, aiAnalysis, aiLoading, handleAiAnalysis, accounts, setEditingTx, setIsTxModalOpen, managers, userRole }) {
+            const getManagerName = (id) => { const m = managers.find(m => m.id === id); return m ? m.name : 'Не назначен'; };
             return (
                 <div className="max-w-5xl mx-auto space-y-6 animate-in fade-in">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -327,7 +563,7 @@
                         {aiAnalysis && <div className="md:col-span-2 bg-indigo-600 text-white rounded-[40px] p-8 shadow-xl relative overflow-hidden animate-in slide-in-from-right duration-500"><div className="relative z-10"><h3 className="font-black uppercase tracking-widest text-indigo-200 text-xs mb-2">Совет нейросети</h3><p className="font-medium text-sm leading-relaxed">{aiAnalysis}</p></div><Sparkles className="absolute right-[-20px] top-[-20px] w-40 h-40 opacity-10 rotate-12" /></div>}
                         {!aiAnalysis && <div className="md:col-span-2 bg-white rounded-[40px] shadow-sm ring-1 ring-black/5 p-10 flex flex-col"><h3 className="font-black text-xs uppercase tracking-widest text-gray-400 mb-6">Счета и кошельки</h3><div className="flex gap-4 overflow-x-auto pb-2 flex-1 items-center no-scrollbar">{Object.values(catBalances).map((cat, idx) => (<div key={idx} className="bg-slate-50 rounded-3xl p-5 min-w-[180px] border border-slate-100 transition-transform hover:scale-[1.02] flex-shrink-0"><div className="text-[10px] font-bold text-gray-400 uppercase truncate mb-1">{cat.name}</div><div className={`font-black text-xl ${cat.balance >= 0 ? 'text-emerald-600' : 'text-rose-500'}`}>{cat.balance.toLocaleString('ru-RU')} ₽</div></div>))}</div></div>}
                     </div>
-                    <div className="glass-panel rounded-[32px] overflow-hidden shadow-sm"><table className="w-full text-left"><thead className="bg-gray-50/50 border-b font-black"><tr className="text-gray-400 text-[10px] uppercase tracking-widest font-black"><th className="p-6">Дата</th><th className="p-6">Статус</th><th className="p-6">Описание</th><th className="p-6 text-right">Сумма</th></tr></thead><tbody className="divide-y divide-gray-100 bg-white/40">{transactions.map(tx => { const accName = accounts.find(a => a.id === tx.accountId)?.name || 'Счет удален'; return (<tr key={tx.id} className={`group transition-colors hover:bg-white ${tx.status === 'plan' ? 'opacity-50' : ''}`}><td className="p-6 text-xs font-bold text-gray-400 uppercase">{tx.date}</td><td className="p-6"><span className={`text-[9px] font-black uppercase px-2 py-1 rounded ${tx.status==='fact'?'bg-slate-900 text-white':'bg-slate-100 text-slate-500'}`}>{tx.status==='fact'?'Проведено':'План'}</span></td><td className="p-6"><div className="font-bold text-gray-900 text-sm">{tx.description || 'Операция'}</div><div className="text-[10px] uppercase font-black text-gray-400 mt-1">{categories.find(c=>c.id===tx.categoryId)?.name || 'Общий'} • {accName}</div></td><td className="p-6 text-right flex items-center justify-end gap-2"><div className={`font-black text-sm ${tx.type==='income'?'text-emerald-600':'text-gray-900'}`}>{tx.type==='income'?'+':'-'}{Number(tx.amount).toLocaleString()} ₽</div><button onClick={()=>{setEditingTx(tx); setIsTxModalOpen(true);}} className="text-slate-400 hover:text-blue-500"><Pencil size={14}/></button><button onClick={()=>deleteTx(tx.id)} className="text-slate-400 hover:text-red-500"><Trash2 size={14}/></button></td></tr>)})}</tbody></table></div>
+                    <div className="glass-panel rounded-[32px] overflow-hidden shadow-sm"><table className="w-full text-left"><thead className="bg-gray-50/50 border-b font-black"><tr className="text-gray-400 text-[10px] uppercase tracking-widest font-black"><th className="p-6">Дата</th><th className="p-6">Статус</th><th className="p-6">Описание</th> {userRole === 'admin' && <th className="p-6">Менеджер</th>}<th className="p-6 text-right">Сумма</th></tr></thead><tbody className="divide-y divide-gray-100 bg-white/40">{transactions.map(tx => { const accName = accounts.find(a => a.id === tx.accountId)?.name || 'Счет удален'; return (<tr key={tx.id} className={`group transition-colors hover:bg-white ${tx.status === 'plan' ? 'opacity-50' : ''}`}><td className="p-6 text-xs font-bold text-gray-400 uppercase">{tx.date}</td><td className="p-6"><span className={`text-[9px] font-black uppercase px-2 py-1 rounded ${tx.status==='fact'?'bg-slate-900 text-white':'bg-slate-100 text-slate-500'}`}>{tx.status==='fact'?'Проведено':'План'}</span></td><td className="p-6"><div className="font-bold text-gray-900 text-sm">{tx.description || 'Операция'}</div><div className="text-[10px] uppercase font-black text-gray-400 mt-1">{categories.find(c=>c.id===tx.categoryId)?.name || 'Общий'} • {accName}</div></td>{userRole === 'admin' && <td className="p-6 text-sm font-medium">{getManagerName(tx.managerId)}</td>}<td className="p-6 text-right flex items-center justify-end gap-2"><div className={`font-black text-sm ${tx.type==='income'?'text-emerald-600':'text-gray-900'}`}>{tx.type==='income'?'+':'-'}{Number(tx.amount).toLocaleString()} ₽</div><button onClick={()=>{setEditingTx(tx); setIsTxModalOpen(true);}} className="text-slate-400 hover:text-blue-500"><Pencil size={14}/></button><button onClick={()=>deleteTx(tx.id)} className="text-slate-400 hover:text-red-500"><Trash2 size={14}/></button></td></tr>)})}</tbody></table></div>
                 </div>
             );
         }
@@ -361,10 +597,23 @@
             const [isLogin, setIsLogin] = useState(true);
             const [mode, setMode] = useState('staff');
             const [email, setEmail] = useState(''); const [password, setPassword] = useState('');
-            const [clientPhone, setClientPhone] = useState(''); const [clientCode, setClientCode] = useState('');
+            const [clientName, setClientName] = useState(''); const [clientPhone, setClientPhone] = useState(''); const [clientCode, setClientCode] = useState('');
             const [companyShortCode, setCompanyShortCode] = useState(''); const [loading, setLoading] = useState(false);
 
-            const handleStaffAuth = async (e) => { e.preventDefault(); setLoading(true); try { if (isLogin) await signInWithEmailAndPassword(auth, email, password); else await createUserWithEmailAndPassword(auth, email, password); } catch (err) { alert(err.message); } setLoading(false); };
+            const handleStaffAuth = async (e) => { 
+                e.preventDefault(); 
+                setLoading(true); 
+                try { 
+                    if (isLogin) {
+                        await signInWithEmailAndPassword(auth, email, password);
+                    } else {
+                        await createUserWithEmailAndPassword(auth, email, password);
+                    }
+                } catch (err) { 
+                    alert(err.message); 
+                } 
+                setLoading(false); 
+            };
             const handleClientAuth = async (e) => { 
                 e.preventDefault(); setLoading(true); 
                 try { 
@@ -374,12 +623,22 @@
                     const adminId = codeDoc.data().ownerId; 
                     const q = query(collection(db, 'artifacts', appId, 'users', adminId, 'clients'), where('phone', '==', clientPhone.trim()), where('code', '==', clientCode.trim())); 
                     const snap = await getDocs(q); 
-                    if (snap.empty) { alert("Неверный телефон или код доступа"); setLoading(false); return; } 
+                    if (snap.empty) { 
+                        if (!isLogin) {
+                            const newClient = { name: clientName, phone: clientPhone, code: clientCode };
+                            await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'clients'), newClient);
+                            alert("Вы успешно зарегистрированы! Теперь вы можете войти, используя ваш телефон и код доступа.");
+                        } else {
+                            alert("Неверный телефон или код доступа"); 
+                        }
+                        setLoading(false); 
+                        return; 
+                    } 
                     const dealsSnap = await getDocs(query(collection(db, 'artifacts', appId, 'users', adminId, 'deals'), where('clientId', '==', snap.docs[0].id))); 
                     if (!dealsSnap.empty) { 
-                        const deal = dealsSnap.docs[0].data(); 
+                        const deals = dealsSnap.docs.map(d => ({id: d.id, ...d.data()})); 
                         const stagesSnap = await getDocs(collection(db, 'artifacts', appId, 'users', adminId, 'stages')); 
-                        setClientViewData({deal, stages: stagesSnap.docs.map(d=>d.data()).sort((a,b)=>a.order-b.order)}); 
+                        setClientViewData({deals, stages: stagesSnap.docs.map(d=>d.data()).sort((a,b)=>a.order-b.order)}); 
                     } else { alert("Заказов нет"); } 
                 } catch(e) { alert("Ошибка входа: " + e.message); } 
                 setLoading(false); 
@@ -396,9 +655,15 @@
                         {mode === 'staff' ? (
                             <form onSubmit={handleStaffAuth} className="space-y-4"><Input placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} required /><Input placeholder="Пароль" type="password" value={password} onChange={e=>setPassword(e.target.value)} required /><button disabled={loading} className="w-full bg-gray-900 text-white py-4 rounded-2xl font-bold hover:bg-black transition-all shadow-lg uppercase tracking-widest text-xs">Войти</button><div className="text-center mt-2"><button type="button" onClick={()=>setIsLogin(!isLogin)} className="text-xs text-slate-400 font-bold hover:text-black uppercase tracking-widest">{isLogin ? 'Регистрация' : 'Вход'}</button></div></form>
                         ) : (
-                            <form onSubmit={handleClientAuth} className="space-y-4"><Input label="Код Компании (6 цифр)" value={companyShortCode} onChange={e=>setCompanyShortCode(e.target.value)} required /><Input label="Ваш телефон" value={clientPhone} onChange={e=>setClientPhone(e.target.value)} required /><Input label="Код доступа" value={clientCode} onChange={e=>setClientCode(e.target.value)} required /><button disabled={loading} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold uppercase text-xs">Войти</button></form>
+                            <form onSubmit={handleClientAuth} className="space-y-4">
+                                {!isLogin && <Input label="Ваше Имя" value={clientName} onChange={e=>setClientName(e.target.value)} required />}
+                                <Input label="Код Компании (6 цифр)" value={companyShortCode} onChange={e=>setCompanyShortCode(e.target.value)} required />
+                                <Input label="Ваш телефон" value={clientPhone} onChange={e=>setClientPhone(e.target.value)} required />
+                                <Input label="Код доступа" value={clientCode} onChange={e=>setClientCode(e.target.value)} required />
+                                <button disabled={loading} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold uppercase text-xs">{isLogin ? 'Войти' : 'Зарегистрироваться'}</button>
+                                <div className="text-center mt-2"><button type="button" onClick={()=>setIsLogin(!isLogin)} className="text-xs text-slate-400 font-bold hover:text-black uppercase tracking-widest">{isLogin ? 'Регистрация' : 'Вход'}</button></div>
+                            </form>
                         )}
-                        <div className="mt-8 pt-8 border-t border-slate-100 grid grid-cols-2 gap-3"><button onClick={async()=>{try{await signInAnonymously(auth);}catch(e){alert(e.message);}}} className="py-3 bg-slate-50 text-slate-600 rounded-xl font-bold text-[10px] uppercase hover:bg-slate-100 transition-colors tracking-widest">Демо Сотрудник</button><button onClick={() => setClientViewData({ deal: { title: 'Демо Заказ', value: 12000, stageId: 'w' }, stages: [{ id: 'w', name: 'В работе' }] })} className="py-3 bg-blue-50 text-blue-600 rounded-xl font-bold text-[10px] uppercase hover:bg-blue-100 transition-colors tracking-widest">Демо Клиент</button></div>
                     </div>
                 </div>
             );
@@ -412,7 +677,10 @@
             const [activeTab, setActiveTab] = useState('kanban');
             const [clientViewData, setClientViewData] = useState(null);
             const [toast, setToast] = useState(null);
-            
+            const [adminId, setAdminId] = useState(null);
+            const [userRole, setUserRole] = useState(null);
+            const [managerDocId, setManagerDocId] = useState(null);
+
             const [stages, setStages] = useState([]); const [deals, setDeals] = useState([]); const [tasks, setTasks] = useState([]); 
             const [clients, setClients] = useState([]); const [categories, setCategories] = useState([]); const [accounts, setAccounts] = useState([]); 
             const [transactions, setTransactions] = useState([]); const [customFields, setCustomFields] = useState([]); const [managers, setManagers] = useState([]);
@@ -421,12 +689,39 @@
             const [voiceStatus, setVoiceStatus] = useState(''); const [isListening, setIsListening] = useState(false); const recognitionRef = useRef(null);
             const [aiAnalysis, setAiAnalysis] = useState(null); const [aiLoading, setAiLoading] = useState(false);
 
-            useEffect(() => { const unsub = onAuthStateChanged(auth, u => { setUser(u); setLoadingAuth(false); }); return () => unsub(); }, []);
             useEffect(() => {
-                if (!user || clientViewData) return;
-                const getPath = (c) => collection(db, 'artifacts', appId, 'users', user.uid, c);
+                const unsub = onAuthStateChanged(auth, async (u) => {
+                    if (u) {
+                        const managerMapRef = doc(db, 'managers_map', u.email);
+                        const managerMapSnap = await getDoc(managerMapRef);
+                        if (managerMapSnap.exists()) { // It's a manager
+                            const { adminId, managerDocId } = managerMapSnap.data();
+                            setUser(u);
+                            setAdminId(adminId);
+                            setManagerDocId(managerDocId);
+                            setUserRole('manager');
+                        } else { // It's an admin
+                            setUser(u);
+                            setAdminId(u.uid);
+                            setManagerDocId(null); // Admins don't have this
+                            setUserRole('admin');
+                        }
+                    } else {
+                        setUser(null);
+                        setAdminId(null);
+                        setManagerDocId(null);
+                        setUserRole(null);
+                    }
+                    setLoadingAuth(false);
+                });
+                return () => unsub();
+            }, []);
+
+            useEffect(() => {
+                if (!adminId || clientViewData) return;
+                const getPath = (c) => collection(db, 'artifacts', appId, 'users', adminId, c);
                 const unsubArr = [
-                    onSnapshot(getPath('stages'), s => { let data = s.docs.map(d => ({id:d.id, ...d.data()})).sort((a,b)=>a.order-b.order); if (!data.length && !s.metadata.hasPendingWrites) [{name:'Замер',order:1},{name:'В работе',order:2},{name:'Монтаж',order:3},{name:'Завершено',order:4}].forEach(st => addDoc(getPath('stages'), st)); else setStages(data); }),
+                    onSnapshot(query(getPath('stages'), orderBy('order')), s => { let data = s.docs.map(d => ({id:d.id, ...d.data()})); if (!data.length && !s.metadata.hasPendingWrites) [{name:'Замер',order:1},{name:'В работе',order:2},{name:'Монтаж',order:3},{name:'Завершено',order:4}].forEach(st => addDoc(getPath('stages'), st)); else setStages(data); }),
                     onSnapshot(getPath('deals'), s => setDeals(s.docs.map(d => ({id:d.id, ...d.data()})))),
                     onSnapshot(getPath('tasks'), s => setTasks(s.docs.map(d => ({id:d.id, ...d.data()})))),
                     onSnapshot(getPath('clients'), s => setClients(s.docs.map(d => ({id:d.id, ...d.data()})))),
@@ -437,14 +732,36 @@
                     onSnapshot(getPath('accounts'), s => { const data = s.docs.map(d => ({id:d.id, ...d.data()})); if(!data.length && !s.metadata.hasPendingWrites) addDoc(getPath('accounts'), {name: 'Основной счет'}); else setAccounts(data); })
                 ];
                 return () => unsubArr.forEach(un => un());
-            }, [user, clientViewData]);
+            }, [adminId, clientViewData]);
 
-            const deleteDeal = async (id) => { await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'deals', id)); setIsDealModalOpen(false); };
-            const deleteTx = async (id) => { if(confirm("Удалить операцию?")) await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'transactions', id)); };
+            const visibleDeals = useMemo(() => {
+                if (userRole === 'manager' && managerDocId) {
+                    return deals.filter(deal => deal.managerId === managerDocId);
+                }
+                return deals;
+            }, [deals, userRole, managerDocId]);
+
+            const visibleClients = useMemo(() => {
+                if (userRole === 'manager' && managerDocId) {
+                    return clients.filter(c => c.managerId === managerDocId);
+                }
+                return clients;
+            }, [clients, userRole, managerDocId]);
+
+            const visibleTransactions = useMemo(() => {
+                if (userRole === 'manager' && managerDocId) {
+                    return transactions.filter(t => t.managerId === managerDocId);
+                }
+                return transactions;
+            }, [transactions, userRole, managerDocId]);
+
+            const deleteDeal = async (id) => { if(adminId) await deleteDoc(doc(db, 'artifacts', appId, 'users', adminId, 'deals', id)); setIsDealModalOpen(false); };
+            const deleteTx = async (id) => { if(confirm("Удалить операцию?")&&adminId) await deleteDoc(doc(db, 'artifacts', appId, 'users', adminId, 'transactions', id)); };
+            const deleteClient = async (id) => { if(confirm("Удалить клиента?")&&adminId) await deleteDoc(doc(db, 'artifacts', appId, 'users', adminId, 'clients', id)); };
             const deleteDocRef = async (docRef) => { await deleteDoc(docRef); };
-            const toggleTask = async (t) => { await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', t.id), { isCompleted: !t.isCompleted }); };
-            const totalBalance = useMemo(() => transactions.reduce((s, t) => s + (t.status === 'fact' ? (t.type === 'income' ? Number(t.amount) : -Number(t.amount)) : 0), 0), [transactions]);
-            const { catBalances } = useMemo(() => { let cB = {}; accounts.forEach(a => cB[a.id] = { name: a.name, balance: 0 }); transactions.forEach(tx => { if (tx.status === 'fact' && tx.accountId && cB[tx.accountId]) cB[tx.accountId].balance += (tx.type === 'income' ? Number(tx.amount) : -Number(tx.amount)); }); return { catBalances: cB }; }, [accounts, transactions]);
+            const toggleTask = async (t) => { if(adminId) await updateDoc(doc(db, 'artifacts', appId, 'users', adminId, 'tasks', t.id), { isCompleted: !t.isCompleted }); };
+            const totalBalance = useMemo(() => visibleTransactions.reduce((s, t) => s + (t.status === 'fact' ? (t.type === 'income' ? Number(t.amount) : -Number(t.amount)) : 0), 0), [visibleTransactions]);
+            const { catBalances } = useMemo(() => { let cB = {}; accounts.forEach(a => cB[a.id] = { name: a.name, balance: 0 }); visibleTransactions.forEach(tx => { if (tx.status === 'fact' && tx.accountId && cB[tx.accountId]) cB[tx.accountId].balance += (tx.type === 'income' ? Number(tx.amount) : -Number(tx.amount)); }); return { catBalances: cB }; }, [accounts, visibleTransactions]);
 
             const startListening = () => {
                 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -454,22 +771,77 @@
                 r.onresult = async (ev) => {
                     const txt = ev.results[0][0].transcript; setVoiceStatus(`Распознал: ${txt}`);
                     const cmd = localCommandParser(txt);
-                    if (cmd && cmd.action === 'create_task') {
-                        await addDoc(collection(db,'artifacts',appId,'users',user.uid,'tasks'), {...cmd.data, isCompleted: false, createdAt: serverTimestamp()});
-                        setToast(`Задача создана: ${cmd.data.title}`);
-                        setTimeout(()=>setToast(null), 3000);
+
+                    try {
+                        let toastMessage = '';
+                        let managerIdToAssign = userRole === 'manager' ? managerDocId : (managers[0]?.id || '');
+                        const assignedManagerId = userRole === 'admin' ? (managers.length > 0 ? managers[0].id : null) : managerDocId;
+
+                        switch (cmd.action) {
+                            case 'create_deal':
+                                await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'deals'), { 
+                                    ...cmd.data,
+                                    managerId: assignedManagerId,
+                                    stageId: stages[0]?.id || '',
+                                    createdAt: serverTimestamp() 
+                                });
+                                toastMessage = `Проект создан: ${cmd.data.title}`;
+                                break;
+                            case 'create_task':
+                                await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'tasks'), { 
+                                    ...cmd.data,
+                                    isCompleted: false, 
+                                    createdAt: serverTimestamp() 
+                                });
+                                toastMessage = `Задача создана: ${cmd.data.title}`;
+                                break;
+                            case 'create_client':
+                                await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'clients'), { 
+                                    ...cmd.data,
+                                    managerId: assignedManagerId,
+                                    code: Math.floor(1000 + Math.random() * 9000).toString(),
+                                });
+                                toastMessage = `Клиент создан: ${cmd.data.name}`;
+                                break;
+                            case 'create_transaction':
+                                const defaultAccount = accounts[0];
+                                const defaultCategory = categories.find(c => c.type === cmd.data.type) || categories[0];
+                                if (defaultAccount && defaultCategory) {
+                                    await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'transactions'), { 
+                                        ...cmd.data, 
+                                        accountId: defaultAccount.id, 
+                                        categoryId: defaultCategory.id,
+                                        managerId: assignedManagerId,
+                                        createdAt: serverTimestamp() 
+                                    });
+                                    toastMessage = `Транзакция добавлена: ${cmd.data.description} (${cmd.data.amount}₽)`;
+                                } else {
+                                    toastMessage = 'Сначала добавьте счета и категории';
+                                }
+                                break;
+                        }
+                        if (toastMessage) {
+                            setToast(toastMessage);
+                            setTimeout(() => setToast(null), 3000);
+                        }
+                    } catch (e) {
+                        console.error("Ошибка обработки голосовой команды:", e);
+                        setToast('Ошибка выполнения команды');
+                        setTimeout(() => setToast(null), 3000);
                     }
+                    
                     setIsListening(false); setTimeout(()=>setVoiceStatus(''), 2500);
                 };
-                r.onerror = () => setIsListening(false);
+                r.onerror = () => {setIsListening(false); setVoiceStatus("Ошибка распознавания");};
                 r.start();
             };
 
             const handleAiAnalysis = async () => {
                 setAiLoading(true);
-                const plannedExp = transactions.filter(t => t.status === 'plan' && t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0);
-                const res = await callGemini(`Баланс: ${totalBalance} р. Плановые расходы: ${plannedExp} р. Сколько безопасно вывести собственнику? Дай краткий ответ.`);
-                setAiAnalysis(res || `Алгоритм: С учетом остатка ${totalBalance}₽ и плановых трат ${plannedExp}₽, рекомендуемый лимит вывода: ${Math.max(0, (totalBalance - plannedExp) * 0.8).toLocaleString()}₽.`);
+                const plannedExp = visibleTransactions.filter(t => t.status === 'plan' && t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0);
+                // Placeholder for Gemini call
+                const res = `С учетом текущего баланса ${totalBalance.toLocaleString()} ₽ и запланированных расходов ${plannedExp.toLocaleString()} ₽, рекомендуется к выводу не более ${Math.max(0, (totalBalance - plannedExp) * 0.7).toLocaleString()} ₽ для сохранения финансовой подушки.`;
+                setAiAnalysis(res);
                 setAiLoading(false);
             };
 
@@ -478,42 +850,56 @@
             if (loadingAuth) return <div className="h-screen flex items-center justify-center bg-gray-50"><Loader2 className="animate-spin text-blue-600" size={48}/></div>;
             
             if (clientViewData) {
-                 const { deal, stages } = clientViewData;
-                 const currentStageIdx = stages.findIndex(s=>s.id === deal.stageId);
-                 return (
+                const { deals, stages } = clientViewData;
+
+                return (
                     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6">
-                        <div className="w-full max-w-md bg-white rounded-[32px] p-8 shadow-xl animate-in zoom-in duration-300">
-                            <div className="flex justify-between items-center mb-6"><h1 className="text-2xl font-black">Мой заказ</h1><button onClick={()=>{setClientViewData(null); signOut(auth);}} className="text-red-500 font-bold uppercase text-[10px]">Выход</button></div>
-                            <h2 className="text-xl font-bold mb-6 text-slate-800">{deal.title}</h2>
-                            <div className="space-y-6 mb-8 relative pl-6 border-l-2 border-slate-100 ml-3">
-                                {stages.map((s, i) => (
-                                    <div key={i} className="flex items-center gap-4 relative">
-                                        <div className={`absolute -left-[29px] w-6 h-6 rounded-full border-4 border-white shadow-sm flex items-center justify-center ${i <= currentStageIdx ? 'bg-blue-600 border-blue-600' : 'bg-white border-slate-300'}`}>{i <= currentStageIdx && <Check size={10} className="text-white"/>}</div>
-                                        <div className={`text-sm font-medium ${i <= currentStageIdx ? 'text-slate-900 font-bold' : 'text-slate-300'}`}>{s.name}</div>
-                                    </div>
-                                ))}
+                        <div className="w-full max-w-2xl bg-white rounded-[32px] p-8 shadow-xl animate-in zoom-in duration-300">
+                            <div className="flex justify-between items-center mb-6">
+                                <h1 className="text-2xl font-black">Мои заказы</h1>
+                                <button onClick={()=>{setClientViewData(null); signOut(auth);}} className="text-red-500 font-bold uppercase text-[10px]">Выход</button>
                             </div>
-                            <div className="bg-slate-900 text-white p-6 rounded-2xl text-center"><div className="text-[10px] font-bold text-slate-400 uppercase mb-1 tracking-widest">К оплате</div><div className="text-3xl font-black tracking-tight">{Number(deal.value).toLocaleString()} ₽</div></div>
+
+                            {deals.map(deal => {
+                                const currentStageIdx = stages.findIndex(s=>s.id === deal.stageId);
+                                return (
+                                    <div key={deal.id} className="mb-8 border-b pb-8">
+                                        <h2 className="text-xl font-bold mb-6 text-slate-800">{deal.title}</h2>
+                                        <div className="space-y-6 mb-8 relative pl-6 border-l-2 border-slate-100 ml-3">
+                                            {stages.map((s, i) => (
+                                                <div key={i} className="flex items-center gap-4 relative">
+                                                    <div className={`absolute -left-[29px] w-6 h-6 rounded-full border-4 border-white shadow-sm flex items-center justify-center ${i <= currentStageIdx ? 'bg-blue-600 border-blue-600' : 'bg-white border-slate-300'}`}>{i <= currentStageIdx && <Check size={10} className="text-white"/>}</div>
+                                                    <div className={`text-sm font-medium ${i <= currentStageIdx ? 'text-slate-900 font-bold' : 'text-slate-300'}`}>{s.name}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <div className="bg-slate-900 text-white p-6 rounded-2xl text-center">
+                                            <div className="text-[10px] font-bold text-slate-400 uppercase mb-1 tracking-widest">К оплате</div>
+                                            <div className="text-3xl font-black tracking-tight">{Number(deal.value).toLocaleString()} ₽</div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
                         </div>
                     </div>
-                 );
+                );
             }
 
             if (!user) return <AuthScreen auth={auth} db={db} appId={appId} setClientViewData={setClientViewData} />;
 
             return (
                 <div className="flex h-screen overflow-hidden relative selection:bg-blue-100">
-                    <aside className="group/aside w-20 hover:w-64 sidebar-transition glass flex flex-col shrink-0 z-50 border-r border-slate-200/50 overflow-hidden">
+                    <aside className="group/aside w-20 hover:w-64 transition-all duration-300 ease-in-out glass flex flex-col shrink-0 z-50 border-r border-slate-200/50 overflow-hidden">
                         <div className="h-20 flex items-center justify-center md:justify-start md:px-8 border-b border-slate-100"><div className="bg-slate-900 p-2 rounded-2xl text-white shadow-lg shrink-0"><Briefcase size={24}/></div><span className="ml-3 font-black text-2xl tracking-tighter uppercase opacity-0 group-hover/aside:opacity-100 transition-opacity duration-300 whitespace-nowrap">ProCRM</span></div>
                         <nav className="flex-1 mt-10 px-4 space-y-1">
                             <NavItem icon={<LayoutDashboard size={22}/>} label="Проекты" active={activeTab === 'kanban'} onClick={()=>setActiveTab('kanban')} />
                             <NavItem icon={<Wallet size={22}/>} label="Финансы" active={activeTab === 'finances'} onClick={()=>setActiveTab('finances')} />
                             <NavItem icon={<Calculator size={22}/>} label="Калькулятор" active={activeTab === 'calculator'} onClick={()=>setActiveTab('calculator')} />
-                            <NavItem icon={<Users size={22}/>} label="Клиенты" active={activeTab === 'clients'} onClick={()=>setActiveTab('clients')} badge={clients.length} />
+                            <NavItem icon={<Users size={22}/>} label="Клиенты" active={activeTab === 'clients'} onClick={()=>setActiveTab('clients')} badge={visibleClients.length} />
                             <NavItem icon={<ListTodo size={22}/>} label="Задачи" active={activeTab === 'tasks'} onClick={()=>setActiveTab('tasks')} badge={tasks.filter(t=>!t.isCompleted).length} />
-                            <NavItem icon={<Settings size={22}/>} label="Система" active={activeTab === 'settings'} onClick={()=>setActiveTab('settings')} />
+                            {userRole === 'admin' && <NavItem icon={<Settings size={22}/>} label="Система" active={activeTab === 'settings'} onClick={()=>setActiveTab('settings')} />}
                         </nav>
-                        <div className="p-4 border-t border-slate-100 text-center shrink-0"><button onClick={()=>signOut(auth)} className="text-slate-400 hover:text-red-500 transition-colors font-black text-[10px] flex items-center justify-center gap-1 w-full py-4 hover:bg-red-50 rounded-2xl uppercase tracking-widest"><LogOut size={16}/> <span className="hidden group-hover/aside:inline ml-2">Выход</span></button></div>
+                        <div className="p-4 border-t border-slate-100 text-center shrink-0"><button onClick={()=>signOut(auth)} className="text-slate-400 hover:text-red-500 transition-colors font-black text-[10px] flex items-center justify-center gap-1 w-full py-4 hover:bg-red-50 rounded-2xl uppercase tracking-widest"><LogOut size={16}/> <span className="opacity-0 group-hover/aside:opacity-100 transition-opacity duration-300 ml-2">Выход</span></button></div>
                     </aside>
 
                     <div className="flex-1 flex flex-col min-w-0 bg-[#F5F5F7]">
@@ -527,12 +913,12 @@
                             </div>
                         </header>
                         <main className="flex-1 overflow-auto p-10 pt-4 relative no-scrollbar">
-                            {activeTab === 'kanban' && <KanbanView stages={stages} deals={deals} clients={clients} setEditingDeal={(d)=>{ setEditingDealId(d?.id || null); setIsDealModalOpen(true);}} setIsDealModalOpen={setIsDealModalOpen} />}
-                            {activeTab === 'finances' && <FinancesView totalBalance={totalBalance} catBalances={catBalances} transactions={transactions} categories={categories} deleteTx={deleteTx} aiAnalysis={aiAnalysis} aiLoading={aiLoading} handleAiAnalysis={handleAiAnalysis} accounts={accounts} setIsTxModalOpen={setIsTxModalOpen} setEditingTx={setEditingTx} />}
+                            {activeTab === 'kanban' && <KanbanView stages={stages} deals={visibleDeals} clients={visibleClients} setEditingDeal={(d)=>{ setEditingDealId(d?.id || null); setIsDealModalOpen(true);}} setIsDealModalOpen={setIsDealModalOpen} managers={managers} userRole={userRole} />}
+                            {activeTab === 'finances' && <FinancesView totalBalance={totalBalance} catBalances={catBalances} transactions={visibleTransactions} categories={categories} deleteTx={deleteTx} aiAnalysis={aiAnalysis} aiLoading={aiLoading} handleAiAnalysis={handleAiAnalysis} accounts={accounts} setIsTxModalOpen={setIsTxModalOpen} setEditingTx={setEditingTx} managers={managers} userRole={userRole} />}
                             {activeTab === 'calculator' && <ProjectCalculator />}
-                            {activeTab === 'clients' && <ClientsView clients={clients} setEditingClient={(c)=>{setEditingClient(c); setIsClientModalOpen(true);}} setIsClientModalOpen={setIsClientModalOpen} />}
-                            {activeTab === 'tasks' && <TasksView tasks={tasks} toggleTask={toggleTask} deleteDoc={deleteDocRef} user={user} appId={appId} db={db} />}
-                            {activeTab === 'settings' && <SettingsView user={user} appId={appId} db={db} accounts={accounts} categories={categories} stages={stages} customFields={customFields} managers={managers} />}
+                            {activeTab === 'clients' && <ClientsView clients={visibleClients} setEditingClient={(c)=>{setEditingClient(c); setIsClientModalOpen(true);}} setIsClientModalOpen={setIsClientModalOpen} deleteClient={deleteClient} managers={managers} userRole={userRole} />}
+                            {activeTab === 'tasks' && <TasksView tasks={tasks} toggleTask={toggleTask} deleteDoc={deleteDocRef} user={user} appId={appId} db={db} adminId={adminId} />}
+                            {activeTab === 'settings' && userRole === 'admin' && <SettingsView user={user} appId={appId} db={db} accounts={accounts} categories={categories} stages={stages} customFields={customFields} managers={managers} />}
                         </main>
                     </div>
 
@@ -551,9 +937,9 @@
                         </button>
                     </div>
 
-                    {isDealModalOpen && <Modal title={deals.find(d=>d.id===editingDealId)?.title || "Проект"} onClose={()=>setIsDealModalOpen(false)} width="max-w-6xl"><DealManager user={user} appId={appId} db={db} deal={deals.find(d=>d.id===editingDealId)} stages={stages} clients={clients} customFields={customFields} onClose={()=>setIsDealModalOpen(false)} tasks={tasks.filter(t=>activeDeal && t.dealId===activeDeal.id)} transactions={transactions.filter(t=>activeDeal && t.dealId===activeDeal.id)} categories={categories} accounts={accounts} toggleTask={toggleTask} deleteDeal={deleteDeal} onClose={()=>setIsDealModalOpen(false)} onAddClient={()=>{setIsDealModalOpen(false); setEditingClient(null); setIsClientModalOpen(true);}} deleteTx={deleteTx} /></Modal>}
-                    {isClientModalOpen && <Modal title={editingClient ? "Карточка" : "Новый клиент"} onClose={()=>setIsClientModalOpen(false)}><ClientForm user={user} appId={appId} db={db} client={editingClient} onClose={()=>setIsClientModalOpen(false)} /></Modal>}
-                    {isTxModalOpen && <Modal title="Операция" onClose={()=>setIsTxModalOpen(false)}><TransactionForm user={user} appId={appId} db={db} categories={categories} accounts={accounts} deals={deals} onClose={()=>setIsTxModalOpen(false)} editingTx={editingTx} /></Modal>}
+                    {isDealModalOpen && <Modal title={deals.find(d=>d.id===editingDealId)?.title || "Проект"} onClose={()=>setIsDealModalOpen(false)} width="max-w-6xl"><DealManager user={user} appId={appId} db={db} deal={deals.find(d=>d.id===editingDealId)} stages={stages} clients={clients} customFields={customFields} onClose={()=>setIsDealModalOpen(false)} tasks={tasks.filter(t=>activeDeal && t.dealId===activeDeal.id)} transactions={transactions.filter(t=>activeDeal && t.dealId===activeDeal.id)} categories={categories} accounts={accounts} toggleTask={toggleTask} deleteDeal={deleteDeal} onAddClient={()=>{setIsDealModalOpen(false); setEditingClient(null); setIsClientModalOpen(true);}} deleteTx={deleteTx} managers={managers} userRole={userRole} managerDocId={managerDocId} adminId={adminId} /></Modal>}
+                    {isClientModalOpen && <Modal title={editingClient ? "Карточка" : "Новый клиент"} onClose={()=>setIsClientModalOpen(false)}><ClientForm user={user} appId={appId} db={db} client={editingClient} onClose={()=>setIsClientModalOpen(false)} managers={managers} userRole={userRole} managerDocId={managerDocId} adminId={adminId} /></Modal>}
+                    {isTxModalOpen && <Modal title="Операция" onClose={()=>setIsTxModalOpen(false)}><TransactionForm user={user} appId={appId} db={db} categories={categories} accounts={accounts} deals={deals} onClose={()=>setIsTxModalOpen(false)} editingTx={editingTx} managers={managers} userRole={userRole} managerDocId={managerDocId} adminId={adminId} /></Modal>}
                     {isHelpModalOpen && <Modal title="Справка" onClose={()=>setIsHelpModalOpen(false)}><div className="p-8 space-y-4"><h3 className="font-bold">План/Факт</h3><p className="text-sm text-gray-500">В финансах используйте статус "План" для будущих трат. Нажмите галочку (или редактировать), чтобы провести операцию.</p></div></Modal>}
                 </div>
             );
