@@ -48,18 +48,18 @@
     <div id="root"></div>
 
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect, useRef, useMemo } from 'react';
+        import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
         import { createRoot } from 'react-dom/client';
         import * as Lucide from 'lucide-react';
         import { initializeApp, getApps, getApp } from 'firebase/app';
         import { getAuth, onAuthStateChanged, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
-        import { getFirestore, collection, onSnapshot, doc, addDoc, updateDoc, deleteDoc, serverTimestamp, setDoc, getDoc, query, where, orderBy } from 'firebase/firestore';
+        import { getFirestore, collection, onSnapshot, doc, addDoc, updateDoc, deleteDoc, serverTimestamp, setDoc, getDoc, query, where, orderBy, documentId, getDocs } from 'firebase/firestore';
 
         const { 
             LayoutDashboard, Users, Wallet, Settings, X, Briefcase, Phone, Mail, Trash2, Check, 
             CreditCard, Tag, Sparkles, Calculator, Layers, MessageSquare, User, HelpCircle, 
             CheckCircle2, Pencil, Copy, AtSign, Send, Crown, Loader2, Mic, MicOff, Hash, 
-            Users2, Lock, Plus, LogOut, Sliders, ChevronRight, FileDown, ExternalLink, ListTodo
+            Users2, Lock, Plus, LogOut, Sliders, ChevronRight, FileDown, ExternalLink, ListTodo, Type, Calendar, Pilcrow
         } = Lucide;
 
         // ==================================================================================
@@ -73,7 +73,7 @@
     		messagingSenderId: "427479091195",
     		appId: "1:427479091195:web:fa3cd7b4c5c7dc9a42ad5e",
     		measurementId: "G-R0CNPHZ5R9"
-  };
+        };
         // ==================================================================================
         
         const appId = 'crm-pro-v1';
@@ -87,6 +87,21 @@
         } catch (e) {
             console.error("Firebase initialization error. Have you inserted your keys?", e);
         }
+
+        // --- HOOKS ---
+        function useDebounce(value, delay) {
+            const [debouncedValue, setDebouncedValue] = useState(value);
+            useEffect(() => {
+                const handler = setTimeout(() => {
+                    setDebouncedValue(value);
+                }, delay);
+                return () => {
+                    clearTimeout(handler);
+                };
+            }, [value, delay]);
+            return debouncedValue;
+        }
+
 
         // --- HELPER FUNCTIONS ---
         const TAB_NAMES = { kanban: 'Проекты', finances: 'Финансы', clients: 'Клиенты', tasks: 'Задачи', settings: 'Система' };
@@ -133,29 +148,275 @@
 
         // --- SUB-MODULES ---
         function CompanyIdCard({ user, db, appId, companyCode, setCompanyCode }) {
-             // Implementation remains the same
+            const [newCode, setNewCode] = useState(companyCode);
+            const handleUpdateCode = async () => {
+                const settingsRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'general');
+                await setDoc(settingsRef, { companyCode: newCode }, { merge: true });
+                setCompanyCode(newCode);
+                alert("Код компании обновлен!");
+            };
+            return (
+                <SettingsCard title="Код компании" icon={<Hash size={16}/>}>
+                    <p className="text-sm mb-4">Этот код позволяет менеджерам и клиентам присоединяться к вашей компании.</p>
+                    <div className="flex items-center gap-2">
+                        <Input value={newCode || ''} onChange={e => setNewCode(e.target.value)} placeholder="Введите код компании" />
+                        <PrimaryBtn onClick={handleUpdateCode}>Сохранить</PrimaryBtn>
+                    </div>
+                </SettingsCard>
+            );
         }
         
-        function TeamManager({ user, db, managers }) {
-             // Implementation remains the same
+        function TeamManager({ user, db, appId, adminId, managers }) {
+            const [name, setName] = useState('');
+            const [email, setEmail] = useState('');
+            const [password, setPassword] = useState('');
+
+            const handleAddManager = async (e) => {
+                e.preventDefault();
+                if(!name || !email || !password || !adminId) return alert("Заполните все поля");
+                
+                try {
+                    // Insecure, should be a cloud function
+                    const tempApp = initializeApp(firebaseConfig, `temp-manager-${Date.now()}`);
+                    const tempAuth = getAuth(tempApp);
+                    const userCredential = await createUserWithEmailAndPassword(tempAuth, email, password);
+                    const newManagerUser = userCredential.user;
+
+                    const managerRef = await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'managers'), {
+                        name,
+                        email,
+                        uid: newManagerUser.uid
+                    });
+
+                    await setDoc(doc(db, 'user_roles', newManagerUser.uid), {
+                        role: 'manager',
+                        adminId: adminId,
+                        managerDocId: managerRef.id
+                    });
+                    
+                    alert(`Менеджер ${name} добавлен.`);
+                    setName(''); setEmail(''); setPassword('');
+                    await tempAuth.signOut();
+
+                } catch (error) {
+                    alert("Ошибка добавления менеджера: " + error.message);
+                }
+            };
+
+            return (
+                <SettingsCard title="Команда" icon={<Users2 size={16}/>}>
+                    <div className="space-y-3 mb-4">
+                        {managers.map(m => (
+                            <div key={m.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                                <div>
+                                    <p className="font-semibold">{m.name}</p>
+                                    <p className="text-xs text-gray-500">{m.email}</p>
+                                </div>
+                                <button className="text-red-500 hover:text-red-700"><Trash2 size={16}/></button>
+                            </div>
+                        ))}
+                    </div>
+                     <form onSubmit={handleAddManager} className="space-y-3 border-t pt-4">
+                        <h4 className="font-bold">Добавить менеджера</h4>
+                        <Input value={name} onChange={e => setName(e.target.value)} placeholder="Имя" />
+                        <Input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email" />
+                        <Input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Пароль" />
+                        <PrimaryBtn type="submit" className="w-full">Добавить</PrimaryBtn>
+                     </form>
+                </SettingsCard>
+            );
         }
 
         function CategoriesManager({ adminId, db, appId, categories }) {
-             // Implementation remains the same
+            const [newCategoryName, setNewCategoryName] = useState('');
+            const [newCategoryType, setNewCategoryType] = useState('expense');
+
+            const handleAddCategory = async () => {
+                if (!newCategoryName.trim() || !adminId) return;
+                const path = collection(db, 'artifacts', appId, 'users', adminId, 'categories');
+                await addDoc(path, { name: newCategoryName, type: newCategoryType });
+                setNewCategoryName('');
+            };
+
+            const handleDeleteCategory = async (id) => {
+                const path = doc(db, 'artifacts', appId, 'users', adminId, 'categories', id);
+                await deleteDoc(path);
+            };
+
+            return (
+                 <SettingsCard title="Категории финансов" icon={<Tag size={16}/>}>
+                    <div className="space-y-2 mb-4">
+                        {categories.map(c => (
+                            <div key={c.id} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
+                                <span className={`font-medium text-sm ${c.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>{c.name}</span>
+                                <button onClick={() => handleDeleteCategory(c.id)} className="text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <Input value={newCategoryName} onChange={e => setNewCategoryName(e.target.value)} placeholder="Новая категория" />
+                        <Select value={newCategoryType} onChange={e => setNewCategoryType(e.target.value)}>
+                            <option value="expense">Расход</option>
+                            <option value="income">Доход</option>
+                        </Select>
+                        <PrimaryBtn onClick={handleAddCategory}><Plus size={16}/></PrimaryBtn>
+                    </div>
+                </SettingsCard>
+            );
         }
 
         function CustomFieldsManager({ adminId, db, appId, customFields }) {
-            // Implementation remains the same
+            const [fieldName, setFieldName] = useState('');
+            const [fieldType, setFieldType] = useState('text');
+
+            const handleAddField = async () => {
+                if (!fieldName.trim() || !adminId) return;
+                await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'customFields'), {
+                    name: fieldName,
+                    type: fieldType,
+                    order: customFields.length
+                });
+                setFieldName('');
+            }
+            
+            const deleteField = async (id) => {
+                 await deleteDoc(doc(db, 'artifacts', appId, 'users', adminId, 'customFields', id));
+            }
+
+            const getIcon = (type) => {
+                if (type === 'text') return <Pilcrow size={14}/>;
+                if (type === 'number') return <Hash size={14}/>;
+                if (type === 'date') return <Calendar size={14}/>;
+            }
+
+            return (
+                <SettingsCard title="Дополнительные поля" icon={<Sliders size={16}/>}>
+                     <div className="space-y-2 mb-4">
+                        {customFields.map(f => (
+                            <div key={f.id} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
+                                <div className="flex items-center gap-2">
+                                    <span className="text-gray-400">{getIcon(f.type)}</span>
+                                    <span className="font-medium text-sm">{f.name}</span>
+                                </div>
+                                <button onClick={() => deleteField(f.id)} className="text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="flex items-center gap-2 border-t pt-4">
+                        <Input value={fieldName} onChange={e => setFieldName(e.target.value)} placeholder="Название поля" />
+                        <Select value={fieldType} onChange={e => setFieldType(e.target.value)}>
+                            <option value="text">Текст</option>
+                            <option value="number">Число</option>
+                            <option value="date">Дата</option>
+                        </Select>
+                        <PrimaryBtn onClick={handleAddField}><Plus size={16}/></PrimaryBtn>
+                    </div>
+                </SettingsCard>
+            );
         }
 
 
         // --- FORMS ---
         
         function ClientForm({ user, db, client, onClose, managers, userRole, managerDocId, adminId, companyCode }) {
-            // Implementation remains the same
+            const [formData, setFormData] = useState(client || { name: '', email: '', phone: '' });
+            const [createLogin, setCreateLogin] = useState(false);
+            const [loginPassword, setLoginPassword] = useState('');
+
+            const handleChange = (field, value) => setFormData(prev => ({...prev, [field]: value}));
+            
+            const handlePhoneChange = (e) => {
+                let value = e.target.value;
+                if (!value) {
+                    handleChange('phone', '+7');
+                    return;
+                }
+                if (value.startsWith('+7')) {
+                     handleChange('phone', value);
+                } else if (value.startsWith('+')) {
+                     handleChange('phone', value);
+                }
+                else {
+                    handleChange('phone', '+7' + value.replace(/[^0-9]/g, ''));
+                }
+            }
+            
+            const handleSave = async () => {
+                if (!formData.name || !adminId) return alert("Имя клиента - обязательное поле");
+                
+                const clientCollection = collection(db, 'artifacts', appId, 'users', adminId, 'clients');
+                
+                try {
+                    if (formData.id) { // Editing existing client
+                        const clientRef = doc(clientCollection, formData.id);
+                        await updateDoc(clientRef, formData);
+                    } else { // Creating new client
+                        const newClientRef = await addDoc(clientCollection, { ...formData, createdAt: serverTimestamp() });
+
+                        if (createLogin && formData.email && loginPassword) {
+                           // NOTE: In a real app, this should be a cloud function for security reasons.
+                           try {
+                                const tempApp = initializeApp(firebaseConfig, `temp-client-${Date.now()}`);
+                                const tempAuth = getAuth(tempApp);
+                                const userCredential = await createUserWithEmailAndPassword(tempAuth, formData.email, loginPassword);
+                                const newClientUser = userCredential.user;
+
+                                // Create role document
+                                await setDoc(doc(db, 'user_roles', newClientUser.uid), {
+                                    role: 'client',
+                                    adminId: adminId,
+                                    clientId: newClientRef.id
+                                });
+                                
+                                // Link uid to client doc
+                                await updateDoc(newClientRef, { uid: newClientUser.uid });
+                                
+                                alert("Клиент и его аккаунт успешно созданы!");
+                                await tempAuth.signOut();
+
+                           } catch (authError) {
+                               alert("Ошибка создания аккаунта клиента: " + authError.message);
+                           }
+                        }
+                    }
+                    onClose();
+                } catch (e) {
+                    alert("Ошибка сохранения клиента: " + e.message);
+                }
+            };
+
+            return (
+                <div className="p-8 space-y-4">
+                    <Input label="Имя *" value={formData.name || ''} onChange={e => handleChange('name', e.target.value)} />
+                    <Input label="Email" type="email" value={formData.email || ''} onChange={e => handleChange('email', e.target.value)} />
+                    <Input 
+                        label="Телефон" 
+                        value={formData.phone || ''}
+                        onFocus={() => !formData.phone && handleChange('phone', '+7')}
+                        onChange={handlePhoneChange} 
+                    />
+                    
+                    {!client?.id && (
+                        <div className="pt-4 border-t">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" checked={createLogin} onChange={e => setCreateLogin(e.target.checked)} />
+                                <span className="text-sm font-medium">Создать аккаунт для входа</span>
+                            </label>
+                            {createLogin && (
+                                <div className="mt-4 space-y-2 animate-in fade-in duration-300">
+                                    <p className="text-xs text-gray-500">Клиент сможет входить в систему с указанным Email и паролем, чтобы отслеживать свои проекты.</p>
+                                    <Input label="Пароль для клиента" type="password" value={loginPassword} onChange={e => setLoginPassword(e.target.value)} placeholder="Придумайте пароль" />
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    <PrimaryBtn onClick={handleSave} className="w-full py-4 uppercase font-black text-xs tracking-widest">Сохранить</PrimaryBtn>
+                </div>
+            );
         }
 
-        function TransactionForm({ onClose, adminId, db, appId, categories, accounts }) {
+        function TransactionForm({ onClose, adminId, db, appId, categories, accounts, dealId }) {
             const [amount, setAmount] = useState('');
             const [type, setType] = useState('expense');
             const [categoryId, setCategoryId] = useState('');
@@ -169,8 +430,16 @@
                     alert("Пожалуйста, заполните все обязательные поля.");
                     return;
                 }
-                const data = { amount: Number(amount), type, categoryId, accountId, description, date, createdAt: serverTimestamp() };
-                await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'transactions'), data);
+                const collectionPath = dealId 
+                    ? collection(db, 'artifacts', appId, 'users', adminId, 'deals', dealId, 'transactions')
+                    : collection(db, 'artifacts', appId, 'users', adminId, 'transactions');
+                
+                const data = { amount: Number(amount), type, categoryId, accountId, description, date, createdAt: serverTimestamp(), dealId: dealId || null };
+                await addDoc(collectionPath, data);
+                if (dealId) {
+                    await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'transactions'), data);
+                }
+
                 onClose();
             };
             
@@ -207,85 +476,207 @@
             );
         }
 
-        function DealCard({ deal: initialDeal, onClose, adminId, db, appId, clients, managers, stages, customFields, userRole, managerDocId, deleteDeal }) {
-            const [deal, setDeal] = useState(initialDeal || { title: '', value: '', clientId: '', managerId: userRole === 'manager' ? managerDocId : '', stageId: stages[0]?.id || '' });
-            const [isEditing, setIsEditing] = useState(!initialDeal);
-            const [activeTab, setActiveTab] = useState('comments');
+        function DealComments({ adminId, db, appId, dealId, user }) {
+            const [comments, setComments] = useState([]);
+            const [newComment, setNewComment] = useState("");
 
             useEffect(() => {
-                setDeal(initialDeal || { title: '', value: '', clientId: '', managerId: userRole === 'manager' ? managerDocId : '', stageId: stages[0]?.id || '' });
-                setIsEditing(!initialDeal);
-            }, [initialDeal]);
+                if (!dealId) return;
+                const q = query(collection(db, 'artifacts', appId, 'users', adminId, 'deals', dealId, 'comments'), orderBy('createdAt', 'asc'));
+                const unsub = onSnapshot(q, snap => {
+                    setComments(snap.docs.map(d => ({id: d.id, ...d.data()})));
+                });
+                return unsub;
+            }, [dealId, adminId, appId]);
+
+            const handleAddComment = async () => {
+                if (!newComment.trim() || !dealId) return;
+                await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'deals', dealId, 'comments'), {
+                    text: newComment,
+                    createdAt: serverTimestamp(),
+                    author: user.email
+                });
+                setNewComment("");
+            }
             
-            const handleChange = (field, value) => {
-                setDeal(prev => ({...prev, [field]: value}));
+            return (
+                <div className="p-1 h-full flex flex-col">
+                    <div className="flex-1 space-y-4 overflow-y-auto no-scrollbar pr-2">
+                        {comments.map(comment => (
+                            <div key={comment.id} className="bg-gray-100 rounded-lg p-3">
+                                <p className="text-xs text-gray-500 font-bold">{comment.author} - {new Date(comment.createdAt?.toDate()).toLocaleString('ru-RU')}</p>
+                                <p className="text-sm text-gray-800">{comment.text}</p>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="mt-4 flex gap-2 pt-2 border-t">
+                        <Input value={newComment} onChange={e => setNewComment(e.target.value)} placeholder="Ваш комментарий..."/>
+                        <PrimaryBtn onClick={handleAddComment}><Send size={16}/></PrimaryBtn>
+                    </div>
+                </div>
+            )
+        }
+        
+        function DealTasks({ adminId, db, appId, dealId }) {
+            const [tasks, setTasks] = useState([]);
+            const [newTask, setNewTask] = useState('');
+            
+            useEffect(() => {
+                if (!dealId) return;
+                const q = query(collection(db, 'artifacts', appId, 'users', adminId, 'deals', dealId, 'tasks'), orderBy('createdAt', 'asc'));
+                const unsub = onSnapshot(q, snap => setTasks(snap.docs.map(d => ({id:d.id, ...d.data()}))));
+                return unsub;
+            }, [dealId, adminId, appId]);
+
+            const handleAddTask = async () => {
+                if(!newTask.trim()) return;
+                await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'deals', dealId, 'tasks'), {
+                    text: newTask,
+                    completed: false,
+                    createdAt: serverTimestamp()
+                });
+                setNewTask('');
             };
 
-            const handleSave = async () => {
-                if (!deal.title || !adminId) return;
-                const data = { ...deal, value: Number(deal.value || 0) };
-                try {
-                    if (deal.id) {
-                        await updateDoc(doc(db, 'artifacts', appId, 'users', adminId, 'deals', deal.id), data);
-                    } else {
-                        const newDealRef = await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'deals'), { ...data, createdAt: serverTimestamp() });
-                        setDeal(prev => ({...prev, id: newDealRef.id}));
+            const toggleTask = async (task) => {
+                const taskRef = doc(db, 'artifacts', appId, 'users', adminId, 'deals', dealId, 'tasks', task.id);
+                await updateDoc(taskRef, { completed: !task.completed });
+            };
+            
+            return (
+                <div className="p-1 h-full flex flex-col">
+                    <div className="flex-1 space-y-3 overflow-y-auto no-scrollbar pr-2">
+                         {tasks.map(task => (
+                            <div key={task.id} onClick={() => toggleTask(task)} className={`p-4 rounded-xl flex items-center gap-4 cursor-pointer transition-all ${task.completed ? 'bg-green-50 text-gray-400 line-through' : 'bg-gray-50 hover:bg-gray-100'}`}>
+                                <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${task.completed ? 'bg-green-500 border-green-500' : 'border-gray-300'}`}>
+                                   {task.completed && <Check size={14} className="text-white"/>}
+                                </div>
+                                <span className="flex-1">{task.text}</span>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="mt-4 flex gap-2 pt-2 border-t">
+                        <Input value={newTask} onChange={e => setNewTask(e.target.value)} placeholder="Новая задача"/>
+                        <PrimaryBtn onClick={handleAddTask}><Plus size={16}/></PrimaryBtn>
+                    </div>
+                </div>
+            )
+        }
+
+        function DealFinances({ adminId, db, appId, dealId, categories, accounts }) {
+            const [transactions, setTransactions] = useState([]);
+            const [isFormOpen, setIsFormOpen] = useState(false);
+
+            useEffect(() => {
+                if (!dealId) return;
+                const q = query(collection(db, 'artifacts', appId, 'users', adminId, 'deals', dealId, 'transactions'), orderBy('date', 'desc'));
+                const unsub = onSnapshot(q, snap => setTransactions(snap.docs.map(d => ({id:d.id, ...d.data()}))));
+                return unsub;
+            }, [dealId, adminId, appId]);
+
+            return (
+                 <div className="p-1 h-full flex flex-col">
+                    <div className="flex-1 overflow-y-auto no-scrollbar pr-2">
+                        {transactions.map(t => (
+                            <div key={t.id} className="p-3 rounded-lg hover:bg-gray-50 flex justify-between items-center">
+                                <div>
+                                    <p className={`font-bold ${t.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>{t.amount.toLocaleString()} ₽</p>
+                                    <p className="text-xs text-gray-500">{new Date(t.date).toLocaleDateString('ru-RU')}</p>
+                                </div>
+                                <p className="text-sm text-gray-600">{t.description}</p>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="mt-4 pt-2 border-t">
+                        <PrimaryBtn onClick={() => setIsFormOpen(true)} className="w-full">Добавить операцию</PrimaryBtn>
+                    </div>
+                    {isFormOpen && <Modal title="Новая операция" onClose={() => setIsFormOpen(false)}><TransactionForm onClose={() => setIsFormOpen(false)} {...{adminId, db, appId, categories, accounts, dealId}} /></Modal>}
+                </div>
+            )
+        }
+
+
+        function DealCard({ deal: initialDeal, onClose, adminId, db, appId, clients, managers, stages, customFields, userRole, managerDocId, deleteDeal, user }) {
+            const [deal, setDeal] = useState(initialDeal || { title: '', value: '', clientId: '', managerId: userRole === 'manager' ? managerDocId : '', stageId: stages[0]?.id || '', customData: {} });
+            const dealRef = useRef(null);
+            const [activeTab, setActiveTab] = useState('comments');
+
+            const debouncedDeal = useDebounce(deal, 1000);
+
+            useEffect(() => {
+                const initial = initialDeal || { title: '', value: '', clientId: '', managerId: userRole === 'manager' ? managerDocId : '', stageId: stages[0]?.id || '', customData: {} };
+                setDeal(initial);
+                if (initialDeal?.id) {
+                    dealRef.current = doc(db, 'artifacts', appId, 'users', adminId, 'deals', initialDeal.id);
+                } else {
+                    dealRef.current = null;
+                }
+            }, [initialDeal, stages, userRole, managerDocId]);
+
+            useEffect(() => {
+                const autoSave = async () => {
+                    if (dealRef.current && initialDeal) { // Only auto-save existing deals
+                        await updateDoc(dealRef.current, { ...debouncedDeal, value: Number(debouncedDeal.value || 0) });
                     }
-                    setIsEditing(false);
-                     if (!deal.id) onClose();
-                } catch (err) { alert(`Ошибка: ${err.message}`); }
+                };
+                autoSave();
+            }, [debouncedDeal, adminId, initialDeal]);
+
+            const handleChange = async (field, value) => {
+                const updatedDeal = {...deal, [field]: value};
+                setDeal(updatedDeal);
+
+                if (!dealRef.current && !initialDeal && updatedDeal.title.trim()) {
+                    const data = { ...updatedDeal, value: Number(updatedDeal.value || 0), createdAt: serverTimestamp() };
+                    const newDocRef = await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'deals'), data);
+                    dealRef.current = newDocRef;
+                }
             };
+            
+            const handleCustomFieldChange = (fieldId, value) => {
+                 const updatedDeal = {
+                     ...deal,
+                     customData: {
+                         ...deal.customData,
+                         [fieldId]: value
+                     }
+                 };
+                 setDeal(updatedDeal);
+            }
 
-            const client = clients.find(c => c.id === deal.clientId);
-            const manager = managers.find(m => m.id === deal.managerId);
-            const currentStageIndex = stages.findIndex(s => s.id === deal.stageId);
-
-            const DetailItem = ({ icon, label, children }) => (<div className="py-3 border-b border-gray-100 last:border-b-0"><div className="flex items-center gap-2 text-gray-500 font-bold text-xs uppercase tracking-wider mb-2">{icon}<span>{label}</span></div><div className="pl-6">{children}</div></div>);
             const DetailTab = ({ label, name }) => (<button onClick={() => setActiveTab(name)} className={`px-4 py-2 font-bold text-sm rounded-md ${activeTab === name ? 'bg-gray-100 text-gray-900' : 'text-gray-500 hover:bg-gray-100/50'}`}>{label}</button>);
 
             return (
                 <div className="flex" style={{ height: 'calc(95vh - 65px)' }}>
                     {/* Left Sidebar */}
                     <div className="w-[350px] shrink-0 border-r border-gray-100 p-6 flex flex-col space-y-4 overflow-y-auto no-scrollbar bg-gray-50/50">
-                        {isEditing ? (
-                            <div className="space-y-4">
-                                <Input label="Название проекта" value={deal.title || ''} onChange={e => handleChange('title', e.target.value)} />
-                                <Select label="Этап" value={deal.stageId} onChange={e => handleChange('stageId', e.target.value)}>
-                                    {stages.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                        <div className="space-y-4">
+                            <Input label="Название проекта" value={deal.title || ''} onChange={e => handleChange('title', e.target.value)} />
+                            <Select label="Этап" value={deal.stageId} onChange={e => handleChange('stageId', e.target.value)}>
+                                {stages.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                            </Select>
+                            <Input label="Бюджет" type="number" value={deal.value || ''} onChange={e => handleChange('value', e.target.value)} />
+                            <Select label="Клиент" value={deal.clientId} onChange={e => handleChange('clientId', e.target.value)}>
+                                <option value="">Без клиента</option>
+                                {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                            </Select>
+                            {userRole === 'admin' && (
+                                <Select label="Менеджер" value={deal.managerId} onChange={e => handleChange('managerId', e.target.value)}>
+                                    <option value="">Не назначен</option>
+                                    {managers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                                 </Select>
-                                <Input label="Бюджет" type="number" value={deal.value || ''} onChange={e => handleChange('value', e.target.value)} />
-                                <Select label="Клиент" value={deal.clientId} onChange={e => handleChange('clientId', e.target.value)}>
-                                    <option value="">Без клиента</option>
-                                    {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                                </Select>
-                                {userRole === 'admin' && (
-                                    <Select label="Менеджер" value={deal.managerId} onChange={e => handleChange('managerId', e.target.value)}>
-                                        <option value="">Не назначен</option>
-                                        {managers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                                    </Select>
-                                )}
-                            </div>
-                        ) : (
-                            <>
-                                <h2 className="text-2xl font-bold">{deal.title}</h2>
-                                <div className="pb-2">
-                                     <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Стадия</label>
-                                    <div className="flex items-center gap-1 mt-2" title={stages[currentStageIndex]?.name || ''}>
-                                        {stages.map((stage, index) => <div key={stage.id} className={`h-1.5 flex-1 rounded-full ${index < currentStageIndex ? 'bg-blue-500' : index === currentStageIndex ? 'bg-green-500' : 'bg-gray-200'}`}></div>)}
-                                    </div>
-                                </div>
-                                <div className="pb-2">
-                                     <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Бюджет</label>
-                                    <div className="font-bold text-xl">{Number(deal.value || 0).toLocaleString()} ₽</div>
-                                </div>
-                                <DetailItem icon={<Users size={14} />} label="Участники">
-                                    {manager ? (<div className="flex items-center gap-2 mt-1"><div className="w-7 h-7 rounded-full bg-orange-100 text-orange-500 flex items-center justify-center font-bold text-xs relative ring-2 ring-white">{manager.name.charAt(0)}<Crown size={10} className="absolute -top-1 -right-1 text-yellow-500" /></div><span className="font-semibold text-sm">{manager.name}</span></div>) : <span className="text-gray-400 text-sm">Не назначен</span>}
-                                </DetailItem>
-                                <DetailItem icon={<User size={14} />} label="Контакты">
-                                    {client ? (<div className="flex items-center gap-2 mt-1"><div className="w-7 h-7 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center font-bold text-xs ring-2 ring-white">{client.name.charAt(0)}</div><div><div className="font-semibold text-sm">{client.name}</div><div className="text-xs text-gray-500">{client.phone}</div></div></div>) : <span className="text-gray-400 text-sm">Клиент не привязан</span>}
-                                </DetailItem>
-                            </>
-                        )}
+                            )}
+                            {customFields.map(field => (
+                                <Input 
+                                    key={field.id}
+                                    label={field.name}
+                                    type={field.type}
+                                    value={deal.customData?.[field.id] || ''}
+                                    onChange={e => handleCustomFieldChange(field.id, e.target.value)}
+                                />
+                            ))}
+                        </div>
+                         {deal.id && userRole === 'admin' && <button onClick={() => deleteDeal(deal.id)} className="mt-auto text-xs font-bold text-red-500 hover:bg-red-50 p-2 rounded-lg flex items-center justify-center gap-2"><Trash2 size={14}/>Удалить проект</button>}
                     </div>
 
                     {/* Right Content */}
@@ -294,29 +685,18 @@
                             <DetailTab label="Комментарии" name="comments" />
                             <DetailTab label="Задачи" name="tasks" />
                             <DetailTab label="Финансы" name="finances" />
-                            <DetailTab label="Активность" name="activity" />
-                             <div className="ml-auto flex items-center gap-2">
-                                {deal.id && !isEditing && userRole !== 'client' && <PrimaryBtn onClick={() => setIsEditing(true)} className="px-4 py-2"><Pencil size={14}/>Редактировать</PrimaryBtn>}
-                            </div>
                         </div>
-                        {/* Tab Content */}
-                         <div className="flex-1 flex flex-col items-center justify-center text-center text-gray-400">
-                            <MessageSquare size={40} className="mb-3 text-gray-300"/>
-                            <h3 className="font-bold text-sm">Нет данных</h3>
+                        <div className="flex-1 overflow-y-auto no-scrollbar -mr-6 -ml-6 pl-6 pr-6">
+                            {activeTab === 'comments' && <DealComments {...{adminId, db, appId, dealId: deal.id, user}} />}
+                            {activeTab === 'tasks' && <DealTasks {...{adminId, db, appId, dealId: deal.id}} />}
+                            {activeTab === 'finances' && <DealFinances {...{adminId, db, appId, dealId: deal.id, categories, accounts:[]}} />}
                         </div>
                     </div>
-                    {(isEditing) && (
-                        <div className="absolute bottom-0 right-0 bg-white/50 backdrop-blur-md p-4 border-t w-full flex justify-end gap-3">
-                            <button onClick={() => { if(initialDeal) setIsEditing(false); else onClose();}} className="font-bold text-gray-500 text-xs uppercase tracking-widest px-6 py-3 rounded-full hover:bg-gray-100">Отмена</button>
-                             <PrimaryBtn onClick={handleSave} className="px-8 py-3 text-xs font-black tracking-widest uppercase">Сохранить</PrimaryBtn>
-                        </div>
-                    )}
                 </div>
             );
         }
 
         function AuthScreen({ auth }) {
-            // Simplified Auth Screen
             const [isLoginView, setIsLoginView] = useState(true);
             const [email, setEmail] = useState('');
             const [password, setPassword] = useState('');
@@ -359,7 +739,6 @@
         }
 
         function KanbanView({ stages, deals, clients, openDealModal, managers, userRole }) {
-            // Implementation remains mostly the same
             const getClientName = (id) => clients.find(c => c.id === id)?.name || 'Без клиента';
             const getManagerName = (id) => managers.find(m => m.id === id)?.name || 'Не назначен';
             return (
@@ -389,19 +768,127 @@
         }
 
         function ClientsView({ clients, setEditingClient, deleteClient, managers, userRole }) {
-             // Implementation remains the same
+             return (
+                <div className="bg-white rounded-[32px] shadow-lg overflow-hidden">
+                    <table className="min-w-full">
+                        <thead className="bg-gray-50">
+                             <tr>
+                                <th className="px-6 py-3 text-left text-xs font-black text-gray-500 uppercase tracking-widest">Имя</th>
+                                <th className="px-6 py-3 text-left text-xs font-black text-gray-500 uppercase tracking-widest">Контакты</th>
+                                {userRole === 'admin' && <th className="px-6 py-3 text-left text-xs font-black text-gray-500 uppercase tracking-widest">Менеджер</th>}
+                                <th className="relative px-6 py-3"><span className="sr-only">Действия</span></th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                            {clients.map(client => (
+                                <tr key={client.id} className="hover:bg-gray-50/50">
+                                    <td className="px-6 py-4 whitespace-nowrap"><div className="font-bold text-sm text-gray-900">{client.name}</div></td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                        <div>{client.email}</div>
+                                        <div>{client.phone}</div>
+                                    </td>
+                                    {userRole === 'admin' && <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{managers.find(m => m.id === client.managerId)?.name || 'Не назначен'}</td>}
+                                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-4">
+                                        <button onClick={() => setEditingClient(client)} className="text-blue-600 hover:text-blue-900 font-bold">Карточка</button>
+                                        {userRole === 'admin' && <button onClick={() => deleteClient(client.id)} className="text-red-500 hover:text-red-700 font-bold">Удалить</button>}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            );
         }
 
         function SettingsView({ user, appId, db, managers, companyCode, setCompanyCode, customFields, categories }) {
-             // Implementation remains the same
+             return (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 max-w-4xl mx-auto">
+                    <div>
+                        <CompanyIdCard {...{user, db, appId, companyCode, setCompanyCode}}/>
+                        <TeamManager {...{user, db, appId, adminId: user.uid, managers}}/>
+                    </div>
+                     <div>
+                        <CategoriesManager {...{adminId: user.uid, db, appId, categories}}/>
+                        <CustomFieldsManager {...{adminId: user.uid, db, appId, customFields}}/>
+                    </div>
+                </div>
+            );
         }
         
         function FinancesView ({ transactions, accounts, categories, adminId, db, appId }) {
-             // Implementation remains the same
+             const getCategoryName = (id) => categories.find(c => c.id === id)?.name || <span className="text-gray-400">Без категории</span>;
+            const getAccountName = (id) => accounts.find(a => a.id === id)?.name || <span className="text-gray-400">Без счета</span>;
+
+            return (
+                 <div className="bg-white rounded-[32px] shadow-lg overflow-hidden">
+                    <table className="min-w-full">
+                        <thead className="bg-gray-50">
+                             <tr>
+                                <th className="px-6 py-3 text-left text-xs font-black text-gray-500 uppercase tracking-widest">Дата</th>
+                                <th className="px-6 py-3 text-left text-xs font-black text-gray-500 uppercase tracking-widest">Сумма</th>
+                                <th className="px-6 py-3 text-left text-xs font-black text-gray-500 uppercase tracking-widest">Категория</th>
+                                <th className="px-6 py-3 text-left text-xs font-black text-gray-500 uppercase tracking-widest">Счет</th>
+                                <th className="px-6 py-3 text-left text-xs font-black text-gray-500 uppercase tracking-widest">Описание</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                            {transactions.map(t => (
+                                <tr key={t.id} className="hover:bg-gray-50/50">
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(t.date).toLocaleDateString('ru-RU')}</td>
+                                    <td className={`px-6 py-4 whitespace-nowrap text-sm font-bold ${t.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
+                                        {t.type === 'income' ? '+' : '-'} {t.amount.toLocaleString()} ₽
+                                    </td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800">{getCategoryName(t.categoryId)}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800">{getAccountName(t.accountId)}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 truncate max-w-xs">{t.description}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            );
         }
         
         function TasksView({ tasks, adminId, db, appId }) {
-             // Implementation remains the same
+             const [newTaskText, setNewTaskText] = useState('');
+             
+             const handleAddTask = async (e) => {
+                e.preventDefault();
+                if(!newTaskText.trim() || !adminId) return;
+                await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'tasks'), {
+                    text: newTaskText,
+                    completed: false,
+                    createdAt: serverTimestamp()
+                });
+                setNewTaskText('');
+             };
+             
+             const toggleTask = async (task) => {
+                const taskRef = doc(db, 'artifacts', appId, 'users', adminId, 'tasks', task.id);
+                await updateDoc(taskRef, { completed: !task.completed });
+             };
+
+             return (
+                <div className="max-w-2xl mx-auto">
+                    <div className="bg-white rounded-[32px] shadow-lg p-8">
+                         <h2 className="text-xl font-black text-gray-800 mb-6">Список задач</h2>
+                        <form onSubmit={handleAddTask} className="flex gap-2 mb-6">
+                            <Input value={newTaskText} onChange={e => setNewTaskText(e.target.value)} placeholder="Что нужно сделать?"/>
+                            <PrimaryBtn type="submit"><Plus size={18}/></PrimaryBtn>
+                        </form>
+                        <div className="space-y-3">
+                            {tasks.map(task => (
+                                <div key={task.id} onClick={() => toggleTask(task)} className={`p-4 rounded-2xl flex items-center gap-4 cursor-pointer transition-all ${task.completed ? 'bg-green-50 text-gray-400 line-through' : 'bg-gray-50 hover:bg-gray-100'}`}>
+                                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${task.completed ? 'bg-green-500 border-green-500' : 'border-gray-300'}`}>
+                                       {task.completed && <Check size={14} className="text-white"/>}
+                                    </div>
+                                    <span className="flex-1">{task.text}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )
         }
         
         function VoiceAssistant({ openNewDealModal }) {
@@ -512,12 +999,15 @@
                             setManagerDocId(roleData.managerDocId || null);
                             setClientId(roleData.clientId || null);
                         } else {
+                            // First time login, could be admin or other role based on company code logic not implemented here
                             await setDoc(roleDocRef, { role: 'admin', adminId: u.uid });
                             setUser(u); setUserRole('admin'); setAdminId(u.uid);
                         }
                     } else {
                         // Reset all state on logout
                         setUser(null); setUserRole(null); setAdminId(null); setManagerDocId(null); setClientId(null);
+                        setStages([]); setDeals([]); setTasks([]); setClients([]); setCategories([]); setAccounts([]);
+                        setTransactions([]); setCustomFields([]); setManagers([]); setClientData({ deals: [], stages: [] });
                     }
                     setLoadingAuth(false);
                 });
@@ -531,6 +1021,7 @@
                 if (adminId) {
                     cleanup();
                     const getPath = (c) => collection(db, 'artifacts', appId, 'users', adminId, c);
+                    
                     if (userRole === 'admin' || userRole === 'manager') {
                         subscriptions = [
                             onSnapshot(query(getPath('stages'), orderBy('order')), s => setStages(s.docs.map(d => ({ id: d.id, ...d.data() })))) ,
@@ -540,17 +1031,26 @@
                             onSnapshot(getPath('categories'), s => setCategories(s.docs.map(d => ({id:d.id, ...d.data()})))),
                             onSnapshot(getPath('accounts'), s => setAccounts(s.docs.map(d => ({id:d.id, ...d.data()})))),
                             onSnapshot(query(getPath('transactions'), orderBy('date', 'desc')), s => setTransactions(s.docs.map(d => ({id:d.id, ...d.data()})))),
-                            onSnapshot(getPath('customFields'), s => setCustomFields(s.docs.map(d => ({id:d.id, ...d.data()})))),
+                            onSnapshot(query(getPath('customFields'), orderBy('order')), s => setCustomFields(s.docs.map(d => ({id:d.id, ...d.data()})))),
                             onSnapshot(getPath('managers'), s => setManagers(s.docs.map(d => ({id:d.id, ...d.data()}))))
                         ];
                         getDoc(doc(db, 'artifacts', appId, 'users', adminId, 'settings', 'general')).then(snap => {
                             if (snap.exists()) setCompanyCode(snap.data().companyCode);
                         });
                     } else if (userRole === 'client' && clientId) {
-                        subscriptions = [
-                            onSnapshot(query(getPath('stages'), orderBy('order')), snap => setClientData(prev => ({...prev, stages: snap.docs.map(d => ({ id: d.id, ...d.data() })) }))),
-                            onSnapshot(query(getPath('deals'), where('clientId', '==', clientId)), snap => setClientData(prev => ({...prev, deals: snap.docs.map(d => ({ id: d.id, ...d.data() })) })))
-                        ];
+                        // For clients, we fetch their deals and all stages for the timeline view.
+                        // This requires Firestore rules to allow clients to read the 'stages' collection.
+                        const dealsQuery = query(getPath('deals'), where('clientId', '==', clientId));
+                        const dealsUnsub = onSnapshot(dealsQuery, snap => {
+                            setClientData(prev => ({ ...prev, deals: snap.docs.map(d => ({ id: d.id, ...d.data() })) }));
+                        });
+
+                        const stagesQuery = query(getPath('stages'), orderBy('order'));
+                        const stagesUnsub = onSnapshot(stagesQuery, snap => {
+                             setClientData(prev => ({ ...prev, stages: snap.docs.map(d => ({ id: d.id, ...d.data() })) }));
+                        });
+
+                        subscriptions.push(dealsUnsub, stagesUnsub);
                     }
                 }
                 return cleanup;
@@ -578,7 +1078,6 @@
             if (loadingAuth) return <div className="h-screen flex items-center justify-center bg-gray-50"><Loader2 className="animate-spin text-blue-600" size={48}/></div>;
 
             if (userRole === 'client') {
-                 // Client View remains the same
                 return (
                     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6">
                         <div className="w-full max-w-2xl bg-white rounded-[32px] p-8 shadow-xl animate-in zoom-in duration-300">
@@ -650,14 +1149,14 @@
                     
                     {isDealModalOpen && 
                         <Modal 
-                            title={editingDeal?.id ? editingDeal.title : 'Новый проект'}
+                            title={editingDeal?.id ? 'Карточка проекта' : 'Новый проект'}
                             onClose={closeDealModal}
                             width={'max-w-5xl'}
                         >
                             <DealCard 
                                 deal={editingDeal} 
                                 onClose={closeDealModal}
-                                {...{adminId, db, appId, clients, managers, stages, customFields, userRole, managerDocId, deleteDeal}}
+                                {...{adminId, db, appId, clients, managers, stages, customFields, userRole, managerDocId, deleteDeal, user}}
                             />
                         </Modal>
                     }
