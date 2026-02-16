@@ -188,7 +188,7 @@
                         uid: newManagerUser.uid
                     });
 
-                    await setDoc(doc(db, 'user_roles', newManagerUser.uid), {
+                    await setDoc(doc(db, 'user_profiles', newManagerUser.uid), {
                         role: 'manager',
                         adminId: adminId,
                         managerDocId: managerRef.id
@@ -362,7 +362,7 @@
                                 const newClientUser = userCredential.user;
 
                                 // Create role document
-                                await setDoc(doc(db, 'user_roles', newClientUser.uid), {
+                                await setDoc(doc(db, 'user_profiles', newClientUser.uid), {
                                     role: 'client',
                                     adminId: adminId,
                                     clientId: newClientRef.id
@@ -989,7 +989,7 @@
             useEffect(() => {
                 const unsub = onAuthStateChanged(auth, async (u) => {
                     if (u) {
-                        const roleDocRef = doc(db, 'user_roles', u.uid);
+                        const roleDocRef = doc(db, 'user_profiles', u.uid);
                         const roleDocSnap = await getDoc(roleDocRef);
                         const roleData = roleDocSnap.data();
                         if (roleData) {
@@ -1069,7 +1069,7 @@
                  if(confirm("Удалить клиента?") && adminId) {
                      const clientToDelete = clients.find(c=>c.id === id);
                      try {
-                        if(clientToDelete?.uid) await deleteDoc(doc(db, 'user_roles', clientToDelete.uid));
+                        if(clientToDelete?.uid) await deleteDoc(doc(db, 'user_profiles', clientToDelete.uid));
                         await deleteDoc(doc(db, 'artifacts', appId, 'users', adminId, 'clients', id));
                      } catch(e) { alert("Ошибка удаления: " + e.message)}
                  }
@@ -1134,7 +1134,7 @@
                              <div className="flex items-center gap-4">
                                 {activeTab === 'kanban' && <PrimaryBtn onClick={() => openDealModal(null)}><Plus size={18}/> Проект</PrimaryBtn>}
                                 {activeTab === 'finances' && <PrimaryBtn onClick={()=> setIsTransactionModalOpen(true)} className="bg-emerald-600 hover:bg-emerald-700 shadow-emerald-100"><Plus size={18}/> Операция</PrimaryBtn>}
-                                {activeTab === 'clients' && <PrimaryBtn onClick={()=>{setEditingClient(null); setIsClientModalOpen(true);}} className="bg-blue-600 hover:bg-blue-700 shadow-blue-100"><Plus size={18}/> Клиент</PrimaryBtn>}
+                                {active_tab === 'clients' && <PrimaryBtn onClick={()=>{setEditingClient(null); setIsClientModalOpen(true);}} className="bg-blue-600 hover:bg-blue-700 shadow-blue-100"><Plus size={18}/> Клиент</PrimaryBtn>}
                                 <VoiceAssistant openNewDealModal={() => openDealModal(null)} />
                             </div>
                         </header>
