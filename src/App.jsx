@@ -1498,12 +1498,30 @@ export default function App() {
                      setUserRole(roleData.role);
                      setAdminId(roleData.adminId);
                      setManagerDocId(roleData.managerDocId || null);
+
                      if (roleData.role === 'admin') {
-                        setCompanyCode(roleData.companyCode);
+                        // --- FIX FOR MISSING COMPANY CODE ---
+                        if (!roleData.companyCode) {
+                            console.log("Company code is missing. Generating a new one...");
+                            let newCompanyCode = generateCompanyCode();
+                            let codeExists = true;
+                            while (codeExists) {
+                                const codeQuery = query(collection(db, 'user_profiles'), where('companyCode', '==', newCompanyCode));
+                                const codeSnapshot = await getDocs(codeQuery);
+                                if (codeSnapshot.empty) {
+                                    codeExists = false;
+                                } else {
+                                    newCompanyCode = generateCompanyCode();
+                                }
+                            }
+                            await updateDoc(roleDocRef, { companyCode: newCompanyCode });
+                            setCompanyCode(newCompanyCode);
+                            console.log("New company code generated and saved:", newCompanyCode);
+                        } else {
+                            setCompanyCode(roleData.companyCode);
+                        }
                      }
                  } else {
-                     // This case should ideally not happen for a verified user 
-                     // if registration is handled correctly.
                      console.error("Verified user without profile found!");
                  }
             } else {
@@ -1581,10 +1599,6 @@ export default function App() {
 
                  if (userRole === 'admin') {
                     subscriptions.push(onSnapshot(query(getPath('deletion_requests'), orderBy('createdAt', 'desc')), s => setDeletionRequests(s.docs.map(d => ({id: d.id, ...d.data()})))));
-                    // Also re-fetch company code if adminId changes
-                    getDoc(doc(db, 'user_profiles', adminId)).then(snap => {
-                        if (snap.exists()) setCompanyCode(snap.data().companyCode);
-                    });
                 }
             }
         }
