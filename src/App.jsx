@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import * as Lucide from 'lucide-react';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, sendEmailVerification } from 'firebase/auth';
-import { getFirestore, collection, onSnapshot, doc, addDoc, updateDoc, deleteDoc, serverTimestamp, setDoc, getDoc, query, where, orderBy, writeBatch, getDocs } from 'firebase/firestore';
+import { getFirestore, collection, onSnapshot, doc, addDoc, updateDoc, deleteDoc, serverTimestamp, setDoc, getDoc, query, where, orderBy, writeBatch, getDocs, deleteField } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 
@@ -11,7 +11,7 @@ const {
     CreditCard, Tag, Sparkles, Calculator, Layers, MessageSquare, User, HelpCircle, 
     CheckCircle2, Pencil, Copy, AtSign, Send, Crown, Loader2, Mic, MicOff, Hash, Home,
     Users2, Lock, Plus, LogOut, Sliders, ChevronRight, FileDown, ExternalLink, ListTodo, Type, Calendar, Pilcrow,
-    Search, GripVertical, Bell, UserCheck, ShieldQuestion, Menu, Archive, Clock, UploadCloud, File as FileIcon
+    Search, GripVertical, Bell, UserCheck, ShieldQuestion, Menu, Archive, Clock, UploadCloud, File: FileIcon
 } = Lucide;
 
 // ==================================================================================
@@ -722,10 +722,10 @@ function FileInputField({ field, value, onFileUpload, onFileDelete, dealId, disa
     };
     
     const handleDelete = async () => {
-        if (!value?.name) return;
+        if (!value?.path) return;
         if (!confirm(`Удалить файл "${value.name}"?`)) return;
          try {
-            await onFileDelete(dealId, field.id, value.name);
+            await onFileDelete(dealId, field.id, value.path);
         } catch (err) {
             console.error("Delete failed", err);
             alert("Ошибка удаления файла.");
@@ -919,7 +919,7 @@ function AuthScreen({ auth, db, appId, showClientLogin }) {
                     const roleDoc = await getDoc(doc(db, 'user_profiles', user.uid));
                     if (roleDoc.exists() && (roleDoc.data().role === 'admin' || roleDoc.data().role === 'manager')) {
                          setUnverifiedUser(user);
-                         setMessage("Ваш аккаунт не подтвержден. Пожалуйста, проверьте вашу почту (включая папку \"Спам\") и перейдите по ссылке.");
+                         setMessage("Ваш аккаунт не подтвержден. Пожалуйста, проверьте вашу почту (включая папку "Спам") и перейдите по ссылке.");
                          setLoading(false);
                          return; 
                     }
