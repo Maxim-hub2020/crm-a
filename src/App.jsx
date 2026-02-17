@@ -3,6 +3,7 @@ import * as Lucide from 'lucide-react';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, sendEmailVerification } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, doc, addDoc, updateDoc, deleteDoc, serverTimestamp, setDoc, getDoc, query, where, orderBy, writeBatch, getDocs } from 'firebase/firestore';
+import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 
 const { 
@@ -10,7 +11,7 @@ const {
     CreditCard, Tag, Sparkles, Calculator, Layers, MessageSquare, User, HelpCircle, 
     CheckCircle2, Pencil, Copy, AtSign, Send, Crown, Loader2, Mic, MicOff, Hash, Home,
     Users2, Lock, Plus, LogOut, Sliders, ChevronRight, FileDown, ExternalLink, ListTodo, Type, Calendar, Pilcrow,
-    Search, GripVertical, Bell, UserCheck, ShieldQuestion, Menu, Archive
+    Search, GripVertical, Bell, UserCheck, ShieldQuestion, Menu, Archive, Clock, UploadCloud, File as FileIcon
 } = Lucide;
 
 // ==================================================================================
@@ -28,11 +29,12 @@ const firebaseConfig = {
 const appId = 'crm-pro-v1';
 
 // Firebase Initialization
-let app, auth, db;
+let app, auth, db, storage;
 try {
     app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
     auth = getAuth(app);
     db = getFirestore(app);
+    storage = getStorage(app);
 } catch (e) {
     console.error("Firebase initialization error. Have you inserted your keys?", e);
 }
@@ -56,7 +58,7 @@ const TAB_NAMES = { dashboard: 'Дашборд', kanban: 'Проекты', finan
 
 const copyToClipboard = (text) => {
     if (!text) return;
-    navigator.clipboard.writeText(text).then(() => alert('Код компании скопирован!'), () => prompt("Не удалось скопировать. Скопируйте вручную:", text));
+    navigator.clipboard.writeText(text).then(() => {}, () => prompt("Не удалось скопировать. Скопируйте вручную:", text));
 };
 
 const generatePassword = () => {
@@ -257,6 +259,7 @@ function CustomFieldsManager({ adminId, db, appId, customFields }) {
         if (type === 'text') return <Pilcrow size={14}/>;
         if (type === 'number') return <Hash size={14}/>;
         if (type === 'date') return <Calendar size={14}/>;
+        if (type === 'file') return <FileIcon size={14}/>;
     }
 
     return (
@@ -278,6 +281,7 @@ function CustomFieldsManager({ adminId, db, appId, customFields }) {
                     <option value="text">Текст</option>
                     <option value="number">Число</option>
                     <option value="date">Дата</option>
+                    <option value="file">Файл</option>
                 </Select>
                 <PrimaryBtn onClick={handleAddField} className="w-full sm:w-auto"><Plus size={16}/></PrimaryBtn>
             </div>
@@ -465,6 +469,7 @@ function TransactionForm({ onClose, adminId, db, appId, categories, accounts, de
         accountId: '',
         description: '',
         date: new Date().toISOString().slice(0, 10),
+        status: 'actual', // 'actual' vs 'planned'
     });
 
     useEffect(() => {
@@ -476,6 +481,7 @@ function TransactionForm({ onClose, adminId, db, appId, categories, accounts, de
                 accountId: editingTransaction.accountId || '',
                 description: editingTransaction.description || '',
                 date: editingTransaction.date || new Date().toISOString().slice(0, 10),
+                status: editingTransaction.status || 'actual',
             });
         }
     }, [editingTransaction]);
@@ -529,10 +535,16 @@ function TransactionForm({ onClose, adminId, db, appId, categories, accounts, de
                 <Input label="Сумма *" type="number" value={formData.amount} onChange={e => handleChange('amount', e.target.value)} required />
                 <Input label="Дата *" type="date" value={formData.date} onChange={e => handleChange('date', e.target.value)} required />
             </div>
-            <Select label="Тип операции" value={formData.type} onChange={e => handleChange('type', e.target.value)}>
-                <option value="expense">Расход</option>
-                <option value="income">Доход</option>
-            </Select>
+            <div className="grid grid-cols-2 gap-4">
+                <Select label="Тип" value={formData.type} onChange={e => handleChange('type', e.target.value)}>
+                    <option value="expense">Расход</option>
+                    <option value="income">Доход</option>
+                </Select>
+                 <Select label="Статус" value={formData.status} onChange={e => handleChange('status', e.target.value)}>
+                    <option value="actual">Фактический</option>
+                    <option value="planned">Плановый</option>
+                </Select>
+            </div>
             <Select label="Категория" value={formData.categoryId} onChange={e => handleChange('categoryId', e.target.value)}>
                 <option value="">Без категории</option>
                 {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -591,59 +603,40 @@ function DealComments({ adminId, db, appId, dealId, user }) {
     )
 }
 
-function DealTasks({ adminId, db, appId, dealId }) {
-    const [tasks, setTasks] = useState([]);
+function DealTasks({ adminId, db, appId, deal, tasks: projectTasks, onTasksUpdate }) {
     const [newTaskText, setNewTaskText] = useState('');
     const [newTaskDeadline, setNewTaskDeadline] = useState('');
     
-    useEffect(() => {
-        if (!dealId) return;
-        const q = query(collection(db, 'artifacts', appId, 'users', adminId, 'deals', dealId, 'tasks'), orderBy('createdAt', 'asc'));
-        const unsub = onSnapshot(q, snap => setTasks(snap.docs.map(d => ({id:d.id, ...d.data()}))));
-        return unsub;
-    }, [dealId, adminId, appId]);
-
     const handleAddTask = async () => {
-        if(!newTaskText.trim()) return;
-        await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'deals', dealId, 'tasks'), {
+        if(!newTaskText.trim() || !deal?.id) return;
+        await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'tasks'), {
             text: newTaskText,
             completed: false,
             deadline: newTaskDeadline,
-            createdAt: serverTimestamp()
+            createdAt: serverTimestamp(),
+            dealId: deal.id,
+            dealTitle: deal.title
         });
         setNewTaskText('');
         setNewTaskDeadline('');
     };
 
     const toggleTask = async (task) => {
-        const taskRef = doc(db, 'artifacts', appId, 'users', adminId, 'deals', dealId, 'tasks', task.id);
+        const taskRef = doc(db, 'artifacts', appId, 'users', adminId, 'tasks', task.id);
         await updateDoc(taskRef, { completed: !task.completed });
     };
 
     const deleteTask = async (taskId) => {
         if (!confirm("Удалить задачу?")) return;
-        const taskRef = doc(db, 'artifacts', appId, 'users', adminId, 'deals', dealId, 'tasks', taskId);
+        const taskRef = doc(db, 'artifacts', appId, 'users', adminId, 'tasks', taskId);
         await deleteDoc(taskRef);
     };
     
     return (
         <div className="p-1 h-full flex flex-col">
             <div className="flex-1 space-y-3 overflow-y-auto no-scrollbar pr-2">
-                 {tasks.length > 0 ? tasks.map(task => (
-                    <div key={task.id} className={`p-4 rounded-xl flex items-start gap-4 transition-all ${task.completed ? 'bg-green-50 text-gray-400 line-through' : 'bg-gray-50 hover:bg-gray-100'}`}>
-                        <div onClick={() => toggleTask(task)} className={`w-5 h-5 mt-1 rounded-full border-2 flex items-center justify-center shrink-0 cursor-pointer ${task.completed ? 'bg-green-500 border-green-500' : 'border-gray-300'}`}>
-                           {task.completed && <Check size={14} className="text-white"/>}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                           <span className="flex-1 break-words">{task.text}</span>
-                           {task.deadline && (
-                                <div className="text-xs text-amber-600 font-bold flex items-center gap-1.5 mt-1">
-                                    <Calendar size={12}/> {new Date(task.deadline).toLocaleDateString('ru-RU')}
-                                </div>
-                           )}
-                        </div>
-                         <button onClick={(e) => { e.stopPropagation(); deleteTask(task.id); }} className="ml-auto text-gray-400 hover:text-red-500 p-1"><Trash2 size={14}/></button>
-                    </div>
+                 {projectTasks.length > 0 ? projectTasks.map(task => (
+                    <TaskItem key={task.id} task={task} onToggle={toggleTask} onDelete={deleteTask} />
                 )) : <p className="text-sm text-center text-gray-400 pt-10">Задач по этому проекту нет.</p>}
             </div>
             <div className="mt-4 flex flex-col sm:flex-row gap-2 pt-2 border-t items-end">
@@ -690,8 +683,9 @@ function DealFinances({ adminId, db, appId, dealId, categories, accounts, manage
                         </div>
                         <div className="flex-1 px-4 min-w-0">
                             <p className="text-sm text-gray-600 truncate">{t.description}</p>
+                             {t.status === 'planned' && <span className="text-xs font-bold text-blue-500 bg-blue-100 px-2 py-0.5 rounded-full">Плановый</span>}
                             {userRole === 'admin' && t.createdBy && (
-                                <p className="text-xs text-gray-400 flex items-center gap-1"><UserCheck size={12}/> {getManagerName(t.createdBy)}</p>
+                                <p className="text-xs text-gray-400 flex items-center gap-1 mt-1"><UserCheck size={12}/> {getManagerName(t.createdBy)}</p>
                             )}
                         </div>
                          <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -709,9 +703,73 @@ function DealFinances({ adminId, db, appId, dealId, categories, accounts, manage
     )
 }
 
+function FileInputField({ field, value, onFileUpload, onFileDelete, dealId, disabled }) {
+    const [uploading, setUploading] = useState(false);
+    const fileInputRef = useRef(null);
 
-function DealCard({ deal, onClose, onSaveNewDeal, onRequestDelete, ...props }) {
-    const { adminId, db, appId, clients, managers, stages, customFields, userRole, managerDocId, user, accounts, categories } = props;
+    const handleFileChange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        setUploading(true);
+        try {
+            await onFileUpload(file, dealId, field.id);
+        } catch (err) {
+            console.error("Upload failed", err);
+            alert("Ошибка загрузки файла.");
+        } finally {
+            setUploading(false);
+        }
+    };
+    
+    const handleDelete = async () => {
+        if (!value?.name) return;
+        if (!confirm(`Удалить файл "${value.name}"?`)) return;
+         try {
+            await onFileDelete(dealId, field.id, value.name);
+        } catch (err) {
+            console.error("Delete failed", err);
+            alert("Ошибка удаления файла.");
+        }
+    }
+
+    if (uploading) {
+        return (
+            <div className="flex items-center gap-2 p-3 text-sm text-gray-500 bg-gray-100 rounded-xl">
+                <Loader2 className="animate-spin" size={16}/> Загрузка...
+            </div>
+        )
+    }
+
+    if (value && value.url) {
+        return (
+             <div className="flex items-center justify-between p-3 bg-blue-50 rounded-xl">
+                 <a href={value.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-sm font-semibold text-blue-600 truncate hover:underline">
+                    <FileIcon size={16}/>
+                    <span className="truncate">{value.name}</span>
+                </a>
+                <button onClick={handleDelete} disabled={disabled} className="p-1 text-red-500 hover:text-red-700 disabled:opacity-50">
+                    <Trash2 size={14}/>
+                </button>
+            </div>
+        )
+    }
+
+    return (
+         <>
+            <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" disabled={disabled}/>
+            <button 
+                onClick={() => fileInputRef.current.click()}
+                disabled={disabled}
+                className="w-full flex items-center justify-center gap-2 p-3 bg-gray-100 hover:bg-gray-200 rounded-xl text-sm font-semibold text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+                <UploadCloud size={16}/> Загрузить файл
+            </button>
+        </>
+    )
+}
+
+function DealCard({ deal, onClose, onSaveNewDeal, onRequestDelete, onFileUpload, onFileDelete, ...props }) {
+    const { adminId, db, appId, clients, managers, stages, customFields, userRole, managerDocId, user, accounts, categories, tasks } = props;
     const [dealData, setDealData] = useState({});
     const [activeTab, setActiveTab] = useState('comments');
     const debouncedDealData = useDebounce(dealData, 1000);
@@ -752,7 +810,9 @@ function DealCard({ deal, onClose, onSaveNewDeal, onRequestDelete, ...props }) {
         onRequestDelete(dealData.id, 'deal', dealData.title);
     }
 
-    const DetailTab = ({ label, name }) => (<button onClick={() => setActiveTab(name)} className={`px-3 sm:px-4 py-2 font-bold text-sm rounded-md ${activeTab === name ? 'bg-gray-100 text-gray-900' : 'text-gray-500 hover:bg-gray-100/50'}`}>{label}</button>);
+    const dealTasks = useMemo(() => tasks.filter(t => t.dealId === dealData.id), [tasks, dealData.id]);
+
+    const DetailTab = ({ label, name, count }) => (<button onClick={() => setActiveTab(name)} className={`px-3 sm:px-4 py-2 font-bold text-sm rounded-md relative ${activeTab === name ? 'bg-gray-100 text-gray-900' : 'text-gray-500 hover:bg-gray-100/50'}`}>{label} {count > 0 && <span className="absolute -top-1 -right-1 bg-blue-500 text-white text-[9px] w-4 h-4 flex items-center justify-center rounded-full">{count}</span>}</button>);
 
     return (
         <div className="flex flex-col lg:flex-row" style={{ height: 'calc(95vh - 65px)' }}>
@@ -774,13 +834,25 @@ function DealCard({ deal, onClose, onSaveNewDeal, onRequestDelete, ...props }) {
                         </Select>
                     )}
                     {customFields.map(field => (
-                        <Input 
-                            key={field.id}
-                            label={field.name}
-                            type={field.type}
-                            value={dealData.customData?.[field.id] || ''}
-                            onChange={e => handleCustomFieldChange(field.id, e.target.value)}
-                        />
+                        <div key={field.id} className="space-y-1.5 w-full text-left">
+                            <Label>{field.name}</Label>
+                            {field.type === 'file' ? (
+                                 <FileInputField 
+                                    field={field}
+                                    value={dealData.customData?.[field.id]}
+                                    onFileUpload={onFileUpload}
+                                    onFileDelete={onFileDelete}
+                                    dealId={dealData.id}
+                                    disabled={!dealData.id}
+                                />
+                            ) : (
+                                <Input 
+                                    type={field.type}
+                                    value={dealData.customData?.[field.id] || ''}
+                                    onChange={e => handleCustomFieldChange(field.id, e.target.value)}
+                                />
+                            )}
+                        </div>
                     ))}
                 </div>
                 <div className="mt-auto flex flex-col gap-2 pt-4 border-t">
@@ -793,12 +865,12 @@ function DealCard({ deal, onClose, onSaveNewDeal, onRequestDelete, ...props }) {
                 {dealData.id ? (<>
                     <div className="flex items-center border-b border-gray-100 pb-3 mb-4">
                         <DetailTab label="Комментарии" name="comments" />
-                        <DetailTab label="Задачи" name="tasks" />
+                        <DetailTab label="Задачи" name="tasks" count={dealTasks.filter(t=>!t.completed).length} />
                         <DetailTab label="Финансы" name="finances" />
                     </div>
                     <div className="flex-1 overflow-y-auto no-scrollbar -mr-6 -ml-6 pl-6 pr-6">
                         {activeTab === 'comments' && <DealComments {...{adminId, db, appId, dealId: dealData.id, user}} />}
-                        {activeTab === 'tasks' && <DealTasks {...{adminId, db, appId, dealId: dealData.id}} />}
+                        {activeTab === 'tasks' && <DealTasks deal={dealData} tasks={dealTasks} {...{adminId, db, appId}} />}
                         {activeTab === 'finances' && <DealFinances {...{...props, dealId: dealData.id }} />}
                     </div>
                 </>) : (
@@ -1153,24 +1225,47 @@ function FinancesView ({ transactions, accounts, categories, managers, userRole,
     const getAccountName = (id) => accounts.find(a => a.id === id)?.name || <span className="text-gray-400">Без счета</span>;
     const getManagerName = (id) => managers.find(m => m.id === id)?.name || id;
 
-    const totalIncome = transactions.reduce((sum, t) => t.type === 'income' ? sum + t.amount : sum, 0);
-    const totalExpense = transactions.reduce((sum, t) => t.type === 'expense' ? sum + t.amount : sum, 0);
-    const balance = totalIncome - totalExpense;
+    const { actualIncome, actualExpense, plannedExpense, actualBalance } = useMemo(() => {
+        let actualIncome = 0;
+        let actualExpense = 0;
+        let plannedExpense = 0;
+
+        transactions.forEach(t => {
+            if (t.status === 'planned') {
+                if (t.type === 'expense') {
+                    plannedExpense += t.amount;
+                }
+            } else { // actual
+                if (t.type === 'income') {
+                    actualIncome += t.amount;
+                } else {
+                    actualExpense += t.amount;
+                }
+            }
+        });
+        const actualBalance = actualIncome - actualExpense;
+        return { actualIncome, actualExpense, plannedExpense, actualBalance };
+    }, [transactions]);
+
 
     return (
         <div>
-             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                 <div className="p-4 sm:p-6 bg-white rounded-3xl shadow-lg">
-                    <div className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-1">Доходы</div>
-                    <div className="text-2xl sm:text-3xl font-black text-green-500">{totalIncome.toLocaleString()} ₽</div>
+                    <div className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-1">Доходы (факт)</div>
+                    <div className="text-2xl sm:text-3xl font-black text-green-500">{actualIncome.toLocaleString()} ₽</div>
                 </div>
                 <div className="p-4 sm:p-6 bg-white rounded-3xl shadow-lg">
-                    <div className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-1">Расходы</div>
-                    <div className="text-2xl sm:text-3xl font-black text-red-500">{totalExpense.toLocaleString()} ₽</div>
+                    <div className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-1">Расходы (факт)</div>
+                    <div className="text-2xl sm:text-3xl font-black text-red-500">{actualExpense.toLocaleString()} ₽</div>
                 </div>
                 <div className="p-4 sm:p-6 bg-white rounded-3xl shadow-lg">
-                    <div className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-1">Баланс</div>
-                    <div className="text-2xl sm:text-3xl font-black text-gray-800">{balance.toLocaleString()} ₽</div>
+                    <div className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-1">Баланс (факт)</div>
+                    <div className="text-2xl sm:text-3xl font-black text-gray-800">{actualBalance.toLocaleString()} ₽</div>
+                </div>
+                 <div className="p-4 sm:p-6 bg-white rounded-3xl shadow-lg">
+                    <div className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-1">Расходы (план)</div>
+                    <div className="text-2xl sm:text-3xl font-black text-blue-500">{plannedExpense.toLocaleString()} ₽</div>
                 </div>
             </div>
 
@@ -1206,8 +1301,13 @@ function FinancesView ({ transactions, accounts, categories, managers, userRole,
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                         {transactions.map(t => (
-                            <tr key={t.id} className="hover:bg-gray-50/50">
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(t.date).toLocaleDateString('ru-RU')}</td>
+                            <tr key={t.id} className={`hover:bg-gray-50/50 ${t.status === 'planned' ? 'opacity-60' : ''}`}>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                    <div className="flex items-center gap-2">
+                                        {t.status === 'planned' && <Clock size={14} className="text-blue-500" />}
+                                        {new Date(t.date).toLocaleDateString('ru-RU')}
+                                    </div>
+                                </td>
                                 <td className={`px-6 py-4 whitespace-nowrap text-sm font-bold ${t.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
                                     {t.type === 'income' ? '+' : '-'} {t.amount.toLocaleString()} ₽
                                 </td>
@@ -1229,10 +1329,13 @@ function FinancesView ({ transactions, accounts, categories, managers, userRole,
             {/* Mobile Cards */}
              <div className="md:hidden space-y-4">
                 {transactions.map(t => (
-                    <div key={t.id} className="bg-white rounded-2xl shadow-lg p-4 space-y-2">
+                    <div key={t.id} className={`bg-white rounded-2xl shadow-lg p-4 space-y-2 ${t.status === 'planned' ? 'opacity-70' : ''}`}>
                         <div className="flex justify-between items-start">
                              <div className={`text-xl font-bold ${t.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>{t.type === 'income' ? '+' : '-'} {t.amount.toLocaleString()} ₽</div>
-                             <div className="text-xs text-gray-500">{new Date(t.date).toLocaleDateString('ru-RU')}</div>
+                             <div className="text-xs text-gray-500 flex items-center gap-1.5">
+                                {t.status === 'planned' && <Clock size={12} className="text-blue-500" />}
+                                {new Date(t.date).toLocaleDateString('ru-RU')}
+                            </div>
                         </div>
                         <div className="text-sm text-gray-600 border-t pt-2 space-y-1">
                              <p className="truncate"><strong>Описание:</strong> {t.description || '-'}</p>
@@ -1252,20 +1355,40 @@ function FinancesView ({ transactions, accounts, categories, managers, userRole,
 }
 
 function TaskItem({ task, onToggle, onDelete }) {
+    const [isExiting, setIsExiting] = useState(false);
+
+    const handleToggle = () => {
+        setIsExiting(true);
+        setTimeout(() => {
+            onToggle(task);
+            setIsExiting(false); // Reset for re-appearing if un-toggled
+        }, 300);
+    };
+
+    const handleDelete = () => {
+        setIsExiting(true);
+        setTimeout(() => onDelete(task.id), 300);
+    };
+
     return (
-        <div className={`p-4 rounded-2xl flex items-start gap-4 transition-all ${task.completed ? 'bg-green-50 text-gray-400 line-through' : 'bg-gray-50 hover:bg-gray-100'}`}>
-            <div onClick={() => onToggle(task)} className={`w-5 h-5 mt-0.5 rounded-full border-2 flex items-center justify-center shrink-0 cursor-pointer ${task.completed ? 'bg-green-500 border-green-500' : 'border-gray-300'}`}>
+        <div className={`p-4 rounded-2xl flex items-start gap-4 transition-all duration-300 ${isExiting ? 'opacity-0 scale-95' : 'opacity-100 scale-100'} ${task.completed ? 'bg-green-50 text-gray-400 line-through' : 'bg-gray-50 hover:bg-gray-100'}`}>
+            <div onClick={handleToggle} className={`w-5 h-5 mt-0.5 rounded-full border-2 flex items-center justify-center shrink-0 cursor-pointer ${task.completed ? 'bg-green-500 border-green-500' : 'border-gray-300'}`}>
                 {task.completed && <Check size={14} className="text-white"/>}
             </div>
             <div className="flex-1 min-w-0">
                 <span className="flex-1 break-words">{task.text}</span>
+                 {task.dealTitle && (
+                    <a href="#" onClick={(e) => { e.preventDefault(); /* Maybe navigate to deal in future */ }} className="text-xs text-blue-500 hover:underline block mt-1">
+                        Проект: {task.dealTitle}
+                    </a>
+                )}
                 {task.deadline && (
                     <div className="text-xs text-amber-600 font-bold flex items-center gap-1.5 mt-1">
                         <Calendar size={12}/> {new Date(task.deadline).toLocaleDateString('ru-RU', { year: 'numeric', month: 'long', day: 'numeric' })}
                     </div>
                 )}
             </div>
-            <button onClick={(e) => { e.stopPropagation(); onDelete(task.id); }} className="ml-auto text-gray-400 hover:text-red-500 p-1">
+            <button onClick={(e) => { e.stopPropagation(); handleDelete(); }} className="ml-auto text-gray-400 hover:text-red-500 p-1">
                 <Trash2 size={16}/>
             </button>
         </div>
@@ -1768,6 +1891,49 @@ export default function App() {
         }
     };
 
+    const handleFileUpload = async (file, dealId, fieldId) => {
+        if (!file || !dealId || !fieldId || !adminId) return;
+
+        const filePath = `deal-files/${dealId}/${fieldId}/${file.name}`;
+        const fileRef = ref(storage, filePath);
+        
+        await uploadBytes(fileRef, file);
+        const downloadURL = await getDownloadURL(fileRef);
+
+        const dealRef = doc(db, 'artifacts', appId, 'users', adminId, 'deals', dealId);
+        await updateDoc(dealRef, {
+            [`customData.${fieldId}`]: {
+                name: file.name,
+                url: downloadURL,
+                path: filePath
+            }
+        });
+         // This is a bit of a hack to force re-render in the modal
+        setDeals(prev => prev.map(d => d.id === dealId ? {...d, customData: {...(d.customData || {}), [fieldId]: { name: file.name, url: downloadURL, path: filePath }}} : d));
+    };
+
+    const handleFileDelete = async (dealId, fieldId, filePath) => {
+        if (!dealId || !fieldId || !filePath || !adminId) return;
+        
+        const fileRef = ref(storage, filePath);
+        await deleteObject(fileRef);
+
+        const dealRef = doc(db, 'artifacts', appId, 'users', adminId, 'deals', dealId);
+         await updateDoc(dealRef, {
+            [`customData.${fieldId}`]: deleteField()
+        });
+        // This is a bit of a hack to force re-render in the modal
+        setDeals(prev => prev.map(d => {
+            if (d.id === dealId) {
+                const newCustomData = {...d.customData};
+                delete newCustomData[fieldId];
+                return {...d, customData: newCustomData};
+            }
+            return d;
+        }));
+    };
+
+
     const handleAddManager = async ({ name, email, password }) => {
         if (!name || !email || !password || !adminId) return alert("Заполните все поля");
 
@@ -1788,7 +1954,7 @@ export default function App() {
                 role: 'manager', adminId: adminId, managerDocId: managerRef.id
             });
 
-            alert(`Менеджер ${name} добавлен. Ему на почту отправлено письмо для подтверждения аккаунта.`);
+            console.log(`Менеджер ${name} добавлен. Ему на почту отправлено письмо для подтверждения аккаунта.`);
         } catch (error) {
             alert("Ошибка добавления менеджера: " + error.message);
         } finally {
@@ -1814,7 +1980,7 @@ export default function App() {
             batch.delete(doc(db, 'artifacts', appId, 'users', adminId, 'managers', manager.id));
 
             await batch.commit();
-            alert(`Менеджер ${manager.name} удален, все его проекты переданы.`);
+            console.log(`Менеджер ${manager.name} удален, все его проекты переданы.`);
             setManagerToDelete(null);
         } catch (e) {
             alert('Ошибка при передаче проектов и удалении: ' + e.message);
@@ -1840,13 +2006,13 @@ export default function App() {
                 createdAt: serverTimestamp()
             };
             await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'deletion_requests'), request);
-            alert('Запрос на удаление отправлен администратору.');
+            console.log('Запрос на удаление отправлен администратору.');
             if (itemType === 'deal') closeDealModal();
         } else { // Admin
             let collectionName = itemType === 'deal' ? 'deals' : itemType === 'client' ? 'clients' : 'transactions';
             await deleteDoc(doc(db, 'artifacts', appId, 'users', adminId, collectionName, itemId));
             if (itemType === 'deal') closeDealModal();
-            alert(`${itemRussian.charAt(0).toUpperCase() + itemRussian.slice(1)} успешно удален(а).`);
+            console.log(`${itemRussian.charAt(0).toUpperCase() + itemRussian.slice(1)} успешно удален(а).`);
         }
     };
 
@@ -1867,14 +2033,14 @@ export default function App() {
                 batch.update(requestRef, { status: newStatus });
                 await batch.commit();
 
-                alert('Запрос одобрен и объект удален.');
+                console.log('Запрос одобрен и объект удален.');
             } catch(e) {
                 alert("Ошибка при удалении: " + e.message);
                 await updateDoc(requestRef, { status: 'failed' });
             }
         } else { // denied
             await updateDoc(requestRef, { status: newStatus });
-            alert('Запрос отклонен.');
+            console.log('Запрос отклонен.');
         }
     }
     
@@ -2017,8 +2183,8 @@ export default function App() {
                     <NavItem icon={<Home size={22}/>} label="Дашборд" active={activeTab === 'dashboard'} onClick={()=>{setActiveTab('dashboard'); setIsSidebarOpen(false);}} isSidebarOpen={isSidebarOpen} />
                     <NavItem icon={<LayoutDashboard size={22}/>} label="Проекты" active={activeTab === 'kanban'} onClick={()=>{setActiveTab('kanban'); setIsSidebarOpen(false);}} isSidebarOpen={isSidebarOpen} />
                     {userRole === 'admin' && <NavItem icon={<Wallet size={22}/>} label="Финансы" active={activeTab === 'finances'} onClick={()=>{setActiveTab('finances'); setIsSidebarOpen(false);}} isSidebarOpen={isSidebarOpen} />}
-                    <NavItem icon={<ListTodo size={22}/>} label="Задачи" active={activeTab === 'tasks'} onClick={()=>{setActiveTab('tasks'); setIsSidebarOpen(false);}} badge={tasks.filter(t => !t.completed).length} isSidebarOpen={isSidebarOpen} />
-                    <NavItem icon={<Users size={22}/>} label="Клиенты" active={activeTab === 'clients'} onClick={()=>{setActiveTab('clients'); setIsSidebarOpen(false);}} badge={filteredClients.length} isSidebarOpen={isSidebarOpen} />
+                    <NavItem icon={<ListTodo size={22}/>} label="Задачи" active={activeTab === 'tasks'} onClick={()=>{setActiveTab('tasks'); setIsSidebarOpen(false);}} isSidebarOpen={isSidebarOpen} />
+                    <NavItem icon={<Users size={22}/>} label="Клиенты" active={activeTab === 'clients'} onClick={()=>{setActiveTab('clients'); setIsSidebarOpen(false);}} isSidebarOpen={isSidebarOpen} />
                     {userRole === 'admin' && <NavItem icon={<ShieldQuestion size={22}/>} label="Запросы" active={activeTab === 'requests'} onClick={()=>{setActiveTab('requests'); setIsSidebarOpen(false);}} badge={deletionRequests.filter(r=>r.status === 'pending').length} isSidebarOpen={isSidebarOpen}/>}
                     {userRole === 'admin' && <NavItem icon={<Settings size={22}/>} label="Система" active={activeTab === 'settings'} onClick={()=>{setActiveTab('settings'); setIsSidebarOpen(false);}} isSidebarOpen={isSidebarOpen} />}
                 </nav>
@@ -2064,8 +2230,10 @@ export default function App() {
                         onClose={closeDealModal}
                         onSaveNewDeal={handleSaveNewDeal}
                         onRequestDelete={handleRequestDelete}
+                        onFileUpload={handleFileUpload}
+                        onFileDelete={handleFileDelete}
                         clients={clients} 
-                        {...{adminId, db, appId, managers, stages, customFields, userRole, managerDocId, user, accounts, categories}}
+                        {...{adminId, db, appId, managers, stages, customFields, userRole, managerDocId, user, accounts, categories, tasks}}
                     />
                 </Modal>
             }
