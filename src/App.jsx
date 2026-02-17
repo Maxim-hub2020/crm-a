@@ -8,9 +8,9 @@ import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 const { 
     LayoutDashboard, Users, Wallet, Settings, X, Briefcase, Phone, Mail, Trash2, Check, 
     CreditCard, Tag, Sparkles, Calculator, Layers, MessageSquare, User, HelpCircle, 
-    CheckCircle2, Pencil, Copy, AtSign, Send, Crown, Loader2, Mic, MicOff, Hash, 
+    CheckCircle2, Pencil, Copy, AtSign, Send, Crown, Loader2, Mic, MicOff, Hash, Home,
     Users2, Lock, Plus, LogOut, Sliders, ChevronRight, FileDown, ExternalLink, ListTodo, Type, Calendar, Pilcrow,
-    Search, GripVertical, Bell, UserCheck, ShieldQuestion, Menu
+    Search, GripVertical, Bell, UserCheck, ShieldQuestion, Menu, Archive
 } = Lucide;
 
 // ==================================================================================
@@ -52,7 +52,7 @@ function useDebounce(value, delay) {
 }
 
 // --- HELPER FUNCTIONS ---
-const TAB_NAMES = { kanban: 'Проекты', finances: 'Финансы', clients: 'Клиенты', tasks: 'Задачи', settings: 'Система', requests: 'Запросы' };
+const TAB_NAMES = { dashboard: 'Дашборд', kanban: 'Проекты', finances: 'Финансы', clients: 'Клиенты', tasks: 'Задачи', settings: 'Система', requests: 'Запросы' };
 
 const copyToClipboard = (text) => {
     if (!text) return;
@@ -1251,11 +1251,52 @@ function FinancesView ({ transactions, accounts, categories, managers, userRole,
     );
 }
 
+function TaskItem({ task, onToggle, onDelete }) {
+    return (
+        <div className={`p-4 rounded-2xl flex items-start gap-4 transition-all ${task.completed ? 'bg-green-50 text-gray-400 line-through' : 'bg-gray-50 hover:bg-gray-100'}`}>
+            <div onClick={() => onToggle(task)} className={`w-5 h-5 mt-0.5 rounded-full border-2 flex items-center justify-center shrink-0 cursor-pointer ${task.completed ? 'bg-green-500 border-green-500' : 'border-gray-300'}`}>
+                {task.completed && <Check size={14} className="text-white"/>}
+            </div>
+            <div className="flex-1 min-w-0">
+                <span className="flex-1 break-words">{task.text}</span>
+                {task.deadline && (
+                    <div className="text-xs text-amber-600 font-bold flex items-center gap-1.5 mt-1">
+                        <Calendar size={12}/> {new Date(task.deadline).toLocaleDateString('ru-RU', { year: 'numeric', month: 'long', day: 'numeric' })}
+                    </div>
+                )}
+            </div>
+            <button onClick={(e) => { e.stopPropagation(); onDelete(task.id); }} className="ml-auto text-gray-400 hover:text-red-500 p-1">
+                <Trash2 size={16}/>
+            </button>
+        </div>
+    );
+}
+
+function TaskSection({ title, tasks, onToggle, onDelete, onClear }) {
+    if (tasks.length === 0 && title !== 'Архив') return null;
+
+    return (
+        <div className="mb-8">
+            <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-black text-gray-500 tracking-wider uppercase">{title}</h3>
+                {onClear && <button onClick={onClear} className="text-xs font-bold text-red-500 hover:underline">Очистить архив</button>}
+            </div>
+            <div className="space-y-3">
+                {tasks.length > 0 
+                    ? tasks.map(task => <TaskItem key={task.id} task={task} onToggle={onToggle} onDelete={onDelete} />)
+                    : <p className="text-sm text-gray-400 italic">Нет задач в этой категории.</p>
+                }
+            </div>
+        </div>
+    );
+}
+
 function TasksView({ tasks, adminId, db, appId }) {
-     const [newTaskText, setNewTaskText] = useState('');
-     const [newTaskDeadline, setNewTaskDeadline] = useState('');
-     
-     const handleAddTask = async (e) => {
+    const [newTaskText, setNewTaskText] = useState('');
+    const [newTaskDeadline, setNewTaskDeadline] = useState('');
+    const [showArchived, setShowArchived] = useState(false);
+
+    const handleAddTask = async (e) => {
         e.preventDefault();
         if(!newTaskText.trim() || !adminId) return;
         await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'tasks'), {
@@ -1266,49 +1307,101 @@ function TasksView({ tasks, adminId, db, appId }) {
         });
         setNewTaskText('');
         setNewTaskDeadline('');
-     };
-     
-     const toggleTask = async (task) => {
+    };
+
+    const toggleTask = async (task) => {
         const taskRef = doc(db, 'artifacts', appId, 'users', adminId, 'tasks', task.id);
         await updateDoc(taskRef, { completed: !task.completed });
-     };
+    };
 
-     const deleteTask = async (taskId) => {
-         if (!confirm("Удалить задачу?")) return;
-         const taskRef = doc(db, 'artifacts', appId, 'users', adminId, 'tasks', taskId);
-         await deleteDoc(taskRef);
-     }
+    const deleteTask = async (taskId) => {
+        if (!confirm("Удалить задачу?")) return;
+        const taskRef = doc(db, 'artifacts', appId, 'users', adminId, 'tasks', taskId);
+        await deleteDoc(taskRef);
+    };
 
-     return (
+    const clearArchive = async () => {
+        if (!confirm("Вы уверены, что хотите навсегда удалить все выполненные задачи? Это действие необратимо.")) return;
+        const batch = writeBatch(db);
+        tasks.filter(t => t.completed).forEach(task => {
+            const taskRef = doc(db, 'artifacts', appId, 'users', adminId, 'tasks', task.id);
+            batch.delete(taskRef);
+        });
+        await batch.commit();
+    }
+
+    const { today, soon, later, archived } = useMemo(() => {
+        const today = [];
+        const soon = [];
+        const later = [];
+        const archived = [];
+
+        const now = new Date();
+        const todayDate = now.setHours(0, 0, 0, 0);
+        const sevenDaysFromNow = new Date(todayDate).setDate(new Date(todayDate).getDate() + 7);
+
+        tasks.forEach(task => {
+            if (task.completed) {
+                archived.push(task);
+                return;
+            }
+
+            if (!task.deadline) {
+                later.push(task);
+                return;
+            }
+
+            const taskDate = new Date(task.deadline).setHours(0, 0, 0, 0);
+            
+            if (taskDate < todayDate) { // Overdue tasks go to Today
+                today.push(task);
+            } else if (taskDate === todayDate) {
+                today.push(task);
+            } else if (taskDate <= sevenDaysFromNow) {
+                soon.push(task);
+            } else {
+                later.push(task);
+            }
+        });
+
+        return { 
+            today: today.sort((a,b) => new Date(a.deadline) - new Date(b.deadline)),
+            soon: soon.sort((a,b) => new Date(a.deadline) - new Date(b.deadline)),
+            later: later.sort((a,b) => new Date(a.deadline) - new Date(b.deadline)),
+            archived: archived.sort((a,b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0))
+        };
+    }, [tasks]);
+
+    return (
         <div className="max-w-4xl mx-auto">
             <div className="bg-white rounded-[32px] shadow-lg p-4 sm:p-8">
-                 <h2 className="text-xl font-black text-gray-800 mb-6">Общий список задач</h2>
-                <form onSubmit={handleAddTask} className="flex flex-col sm:flex-row gap-2 mb-6 items-end">
-                    <Input value={newTaskText} onChange={e => setNewTaskText(e.target.value)} placeholder="Что нужно сделать?" label="Новая задача"/>
-                    <Input type="date" label="Срок" value={newTaskDeadline} onChange={e => setNewTaskDeadline(e.target.value)} className="w-full sm:w-48"/>
-                    <PrimaryBtn type="submit" className="w-full sm:w-auto"><Plus size={18}/></PrimaryBtn>
-                </form>
-                <div className="space-y-3">
-                    {tasks.map(task => (
-                        <div key={task.id} className={`p-4 rounded-2xl flex items-start gap-4 transition-all ${task.completed ? 'bg-green-50 text-gray-400 line-through' : 'bg-gray-50 hover:bg-gray-100'}`}>
-                            <div onClick={() => toggleTask(task)} className={`w-5 h-5 mt-1 rounded-full border-2 flex items-center justify-center shrink-0 cursor-pointer ${task.completed ? 'bg-green-500 border-green-500' : 'border-gray-300'}`}>
-                               {task.completed && <Check size={14} className="text-white"/>}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                                <span className="flex-1 break-words">{task.text}</span>
-                                {task.deadline && (
-                                    <div className="text-xs text-amber-600 font-bold flex items-center gap-1.5 mt-1">
-                                        <Calendar size={12}/> {new Date(task.deadline).toLocaleDateString('ru-RU')}
-                                    </div>
-                               )}
-                            </div>
-                            <button onClick={(e) => { e.stopPropagation(); deleteTask(task.id); }} className="ml-auto text-gray-400 hover:text-red-500 p-1"><Trash2 size={16}/></button>
-                        </div>
-                    ))}
+                <div className="flex justify-between items-center mb-6">
+                     <h2 className="text-xl font-black text-gray-800">{showArchived ? 'Архив задач' : 'Общий список задач'}</h2>
+                     <button onClick={() => setShowArchived(!showArchived)} className="flex items-center gap-2 text-sm font-bold py-2 px-4 rounded-full hover:bg-gray-100">
+                         {showArchived ? <ListTodo size={16} /> : <Archive size={16} />} 
+                         {showArchived ? 'К списку задач' : 'Архив'}
+                     </button>
                 </div>
+
+                {!showArchived && (
+                    <form onSubmit={handleAddTask} className="flex flex-col sm:flex-row gap-2 mb-8 items-end p-4 border rounded-2xl">
+                        <Input value={newTaskText} onChange={e => setNewTaskText(e.target.value)} placeholder="Что нужно сделать?" label="Новая задача"/>
+                        <Input type="date" label="Срок" value={newTaskDeadline} onChange={e => setNewTaskDeadline(e.target.value)} className="w-full sm:w-48"/>
+                        <PrimaryBtn type="submit" className="w-full sm:w-auto"><Plus size={18}/></PrimaryBtn>
+                    </form>
+                )}
+
+                {showArchived 
+                    ? <TaskSection title="Архив" tasks={archived} onToggle={toggleTask} onDelete={deleteTask} onClear={clearArchive} />
+                    : <>
+                        <TaskSection title="Сегодня" tasks={today} onToggle={toggleTask} onDelete={deleteTask} />
+                        <TaskSection title="В скором времени" tasks={soon} onToggle={toggleTask} onDelete={deleteTask} />
+                        <TaskSection title="Позже" tasks={later} onToggle={toggleTask} onDelete={deleteTask} />
+                      </>
+                }
             </div>
         </div>
-    )
+    );
 }
 
 function ClientLoginScreen({ onLoginSuccess, onBack }) {
@@ -1438,7 +1531,7 @@ export default function App() {
     const [loadingAuth, setLoadingAuth] = useState(true);
     const [isClientLogin, setIsClientLogin] = useState(false);
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-    const [activeTab, setActiveTab] = useState('kanban');
+    const [activeTab, setActiveTab] = useState('dashboard');
     
     // User & Data State
     const [userRole, setUserRole] = useState(null);
@@ -1578,7 +1671,7 @@ export default function App() {
                 const getPath = (c) => collection(db, 'artifacts', appId, 'users', adminId, c);
                 const commonSubs = [
                     onSnapshot(query(getPath('stages'), orderBy('order')), s => setStages(s.docs.map(d => ({ id: d.id, ...d.data() })))) ,
-                    onSnapshot(getPath('tasks'), s => setTasks(s.docs.map(d => ({id:d.id, ...d.data()})))),
+                    onSnapshot(query(getPath('tasks'), orderBy('createdAt', 'desc')), s => setTasks(s.docs.map(d => ({id:d.id, ...d.data()})))),
                     onSnapshot(getPath('categories'), s => setCategories(s.docs.map(d => ({id:d.id, ...d.data()})))),
                     onSnapshot(getPath('accounts'), s => setAccounts(s.docs.map(d => ({id:d.id, ...d.data()})))),
                     onSnapshot(query(getPath('customFields'), orderBy('order')), s => setCustomFields(s.docs.map(d => ({id:d.id, ...d.data()})))),
@@ -1663,7 +1756,8 @@ export default function App() {
         const newDealData = {
             ...dealData,
             createdBy: creatorId,
-            createdAt: serverTimestamp()
+            createdAt: serverTimestamp(),
+            stageUpdatedAt: serverTimestamp()
         };
         try {
             await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'deals'), newDealData);
@@ -1791,7 +1885,7 @@ export default function App() {
         if (destination.droppableId === source.droppableId && destination.index === source.index) return;
 
         const dealRef = doc(db, 'artifacts', appId, 'users', adminId, 'deals', draggableId);
-        await updateDoc(dealRef, { stageId: destination.droppableId });
+        await updateDoc(dealRef, { stageId: destination.droppableId, stageUpdatedAt: serverTimestamp() });
     };
 
     const handleClientLogin = (client) => {
@@ -1848,6 +1942,67 @@ export default function App() {
         );
     }
     
+    function DashboardView({ deals, tasks, stages, clients, managers, userRole, openDealModal }) {
+        const getStageName = (id) => stages.find(s => s.id === id)?.name || 'Неизвестно';
+        const getClientName = (id) => clients.find(c => c.id === id)?.name || 'Без клиента';
+        const getManagerName = (id) => managers.find(m => m.id === id)?.name || 'Не назначен';
+
+        const { stuckDeals, upcomingTasks } = useMemo(() => {
+            const fiveDaysAgo = new Date();
+            fiveDaysAgo.setDate(fiveDaysAgo.getDate() - 5);
+
+            const stuck = deals.filter(deal => 
+                deal.stageUpdatedAt && deal.stageUpdatedAt.toDate() < fiveDaysAgo
+            );
+
+            const now = new Date();
+            const todayDate = now.setHours(0, 0, 0, 0);
+            const sevenDaysFromNow = new Date(todayDate).setDate(new Date(todayDate).getDate() + 7);
+            
+            const upcoming = tasks.filter(task => {
+                if(task.completed) return false;
+                if(!task.deadline) return false;
+                const taskDate = new Date(task.deadline).setHours(0, 0, 0, 0);
+                return taskDate <= sevenDaysFromNow;
+            }).sort((a,b) => new Date(a.deadline) - new Date(b.deadline));
+
+            return { stuckDeals: stuck, upcomingTasks: upcoming };
+        }, [deals, tasks]);
+
+        return (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <div>
+                    <h2 className="text-xl font-black text-gray-800 mb-4 flex items-center gap-2"><Layers size={20} className="text-orange-500"/> Зависшие проекты</h2>
+                    <div className="bg-white rounded-[32px] shadow-lg p-4 space-y-3">
+                        {stuckDeals.length > 0 ? stuckDeals.map(deal => (
+                            <div key={deal.id} onClick={() => openDealModal(deal)} className="p-4 bg-gray-50 rounded-2xl hover:bg-gray-100 cursor-pointer">
+                                <h4 className="font-bold text-gray-800">{deal.title}</h4>
+                                <p className="text-xs text-gray-500">Клиент: {getClientName(deal.clientId)}</p>
+                                <p className="text-xs text-red-500 font-semibold">На этапе "{getStageName(deal.stageId)}" с {deal.stageUpdatedAt.toDate().toLocaleDateString('ru-RU')}</p>
+                                {userRole === 'admin' && <p className="text-xs text-gray-400">Менеджер: {getManagerName(deal.managerId)}</p>}
+                            </div>
+                        )) : <p className="text-center p-8 text-gray-400">Нет проектов, требующих внимания.</p>}
+                    </div>
+                </div>
+                <div>
+                     <h2 className="text-xl font-black text-gray-800 mb-4 flex items-center gap-2"><ListTodo size={20} className="text-blue-500"/> Ближайшие задачи</h2>
+                     <div className="bg-white rounded-[32px] shadow-lg p-4 space-y-3">
+                         {upcomingTasks.length > 0 ? upcomingTasks.map(task => (
+                            <div key={task.id} className="p-4 bg-gray-50 rounded-2xl">
+                                <p className="font-semibold text-gray-800">{task.text}</p>
+                                {task.deadline && (
+                                     <div className="text-xs text-amber-600 font-bold flex items-center gap-1.5 mt-1">
+                                        <Calendar size={12}/> Срок: {new Date(task.deadline).toLocaleDateString('ru-RU')}
+                                    </div>
+                                )}
+                            </div>
+                         )) : <p className="text-center p-8 text-gray-400">Нет задач на ближайшее время.</p>}
+                    </div>
+                </div>
+            </div>
+        );
+    }
+    
     return (
         <div className="flex h-screen overflow-hidden relative selection:bg-blue-100">
              {isSidebarOpen && <div onClick={() => setIsSidebarOpen(false)} className="fixed inset-0 bg-black/30 z-40 md:hidden"></div>}
@@ -1859,6 +2014,7 @@ export default function App() {
                         ${isSidebarOpen ? 'opacity-100' : 'opacity-0 md:group-hover/aside:opacity-100'}`}>ProCRM</span>
                 </div>
                 <nav className="flex-1 mt-10 px-4 space-y-1">
+                    <NavItem icon={<Home size={22}/>} label="Дашборд" active={activeTab === 'dashboard'} onClick={()=>{setActiveTab('dashboard'); setIsSidebarOpen(false);}} isSidebarOpen={isSidebarOpen} />
                     <NavItem icon={<LayoutDashboard size={22}/>} label="Проекты" active={activeTab === 'kanban'} onClick={()=>{setActiveTab('kanban'); setIsSidebarOpen(false);}} isSidebarOpen={isSidebarOpen} />
                     {userRole === 'admin' && <NavItem icon={<Wallet size={22}/>} label="Финансы" active={activeTab === 'finances'} onClick={()=>{setActiveTab('finances'); setIsSidebarOpen(false);}} isSidebarOpen={isSidebarOpen} />}
                     <NavItem icon={<ListTodo size={22}/>} label="Задачи" active={activeTab === 'tasks'} onClick={()=>{setActiveTab('tasks'); setIsSidebarOpen(false);}} badge={tasks.filter(t => !t.completed).length} isSidebarOpen={isSidebarOpen} />
@@ -1887,6 +2043,7 @@ export default function App() {
                     </div>
                 </header>
                 <main className="flex-1 overflow-auto p-4 sm:p-6 lg:p-10 pt-4 relative no-scrollbar">
+                   {activeTab === 'dashboard' && <DashboardView deals={deals} tasks={tasks} stages={stages} clients={clients} managers={managers} userRole={userRole} openDealModal={openDealModal} />}
                    {activeTab === 'kanban' && <KanbanView stages={stages} deals={filteredDeals} clients={clients} openDealModal={openDealModal} managers={managers} userRole={userRole} onDragEnd={handleDragEnd} searchTerm={dealSearch} onSearchChange={setDealSearch} />}
                    {activeTab === 'finances' && userRole === 'admin' && <FinancesView transactions={filteredTransactions} accounts={accounts} categories={categories} managers={managers} userRole={userRole} onEditTransaction={(t) => {setEditingTransaction(t); setIsTransactionModalOpen(true);}} onRequestDelete={handleRequestDelete} searchTerm={financeSearch} onSearchChange={setFinanceSearch} selectedAccount={selectedAccountId} onAccountChange={setSelectedAccountId} />}
                    {activeTab === 'requests' && userRole === 'admin' && <DeletionRequestsView requests={deletionRequests} onUpdateRequest={handleUpdateRequest} managers={managers} />}
