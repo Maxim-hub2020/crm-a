@@ -251,7 +251,7 @@ function CustomFieldsManager({ adminId, db, appId, customFields }) {
         setFieldName('');
     }
     
-    const deleteField = async (id) => {
+    const deleteCustomField = async (id) => {
          await deleteDoc(doc(db, 'artifacts', appId, 'users', adminId, 'customFields', id));
     }
 
@@ -271,7 +271,7 @@ function CustomFieldsManager({ adminId, db, appId, customFields }) {
                             <span className="text-gray-400">{getIcon(f.type)}</span>
                             <span className="font-medium text-sm">{f.name}</span>
                         </div>
-                        <button onClick={() => deleteField(f.id)} className="text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
+                        <button onClick={() => deleteCustomField(f.id)} className="text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
                     </div>
                 ))}
             </div>
@@ -919,7 +919,7 @@ function AuthScreen({ auth, db, appId, showClientLogin }) {
                     const roleDoc = await getDoc(doc(db, 'user_profiles', user.uid));
                     if (roleDoc.exists() && (roleDoc.data().role === 'admin' || roleDoc.data().role === 'manager')) {
                          setUnverifiedUser(user);
-                        setMessage("Ваш аккаунт не подтвержден. Пожалуйста, проверьте вашу почту, включая папку "Спам" и перейдите по ссылке.");
+                        setMessage("Ваш аккаунт не подтвержден. Пожалуйста, проверьте вашу почту, включая папку \"Спам\" и перейдите по ссылке.");
                          setLoading(false);
                          return; 
                     }
