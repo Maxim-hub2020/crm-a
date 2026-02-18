@@ -919,7 +919,7 @@ function AuthScreen({ auth, db, appId, showClientLogin }) {
                     const roleDoc = await getDoc(doc(db, 'user_profiles', user.uid));
                     if (roleDoc.exists() && (roleDoc.data().role === 'admin' || roleDoc.data().role === 'manager')) {
                          setUnverifiedUser(user);
-                         setMessage("Ваш аккаунт не подтвержден. Пожалуйста, проверьте вашу почту (включая папку "Спам") и перейдите по ссылке.");
+                        setMessage("Ваш аккаунт не подтвержден. Пожалуйста, проверьте вашу почту, включая папку "Спам" и перейдите по ссылке.");
                          setLoading(false);
                          return; 
                     }
