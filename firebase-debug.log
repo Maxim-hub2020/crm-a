@@ -1,0 +1,45 @@
+[debug] [2026-02-18T12:10:46.839Z] ----------------------------------------------------------------------
+[debug] [2026-02-18T12:10:46.842Z] Command:       /nix/store/ws50yvm6vzlzf7jzz6n7xh4szddrack1-nodejs-20.19.1/bin/node /nix/store/gm9mcvzb17vv8cla08khrg29vxn3sq4r-firebase-tools-15.1.0/lib/node_modules/firebase-tools/lib/bin/firebase.js init hosting
+[debug] [2026-02-18T12:10:46.842Z] CLI Version:   15.1.0
+[debug] [2026-02-18T12:10:46.842Z] Platform:      linux
+[debug] [2026-02-18T12:10:46.843Z] Node Version:  v20.19.1
+[debug] [2026-02-18T12:10:46.843Z] Time:          Wed Feb 18 2026 12:10:46 GMT+0000 (Coordinated Universal Time)
+[debug] [2026-02-18T12:10:46.843Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-02-18T12:10:49.002Z] Checked if tokens are valid: true, expires at: 1771420243990
+[debug] [2026-02-18T12:10:49.003Z] Checked if tokens are valid: true, expires at: 1771420243990
+[debug] [2026-02-18T12:10:49.007Z] >>> [apiv2][query] GET https://monospace-pa.googleapis.com/v1/workspaces/crm-a-52615261 [none]
+[debug] [2026-02-18T12:10:49.789Z] <<< [apiv2][status] GET https://monospace-pa.googleapis.com/v1/workspaces/crm-a-52615261 200
+[debug] [2026-02-18T12:10:49.790Z] <<< [apiv2][body] GET https://monospace-pa.googleapis.com/v1/workspaces/crm-a-52615261 {"workspaceId":"crm-a-52615261","name":"crm-a","workspaceRedirectUrl":"firebase-crm-a-1771142376137.cluster-64pjnskmlbaxowh5lzq6i7v4ra.cloudworkstations.dev","status":"WORKSPACE_STATUS_RUNNING","lastAccessDatetime":"2026-02-18T12:06:22.424687Z","workspaceTemplate":"WORKSPACE_TEMPLATE_BLANK_WEB","owner":"SELF","serviceAccountEmail":"msp-5714272312005029415@monospace-2.iam.gserviceaccount.com","gitRepoUrl":"https://github.com/Maxim-hub2020/crm-a","enableNix":true,"ownerEmail":"minitraveler2025@gmail.com","workstationAccessToken":"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2Nsb3VkLmdvb2dsZS5jb20vd29ya3N0YXRpb25zIiwiYXVkIjoiZmlyZWJhc2UtY3JtLWEtMTc3MTE0MjM3NjEzNy5jbHVzdGVyLTY0cGpuc2ttbGJheG93aDVsenE2aTd2NHJhLmNsb3Vkd29ya3N0YXRpb25zLmRldiIsImlhdCI6MTc3MTQxNjY0OSwiZXhwIjoxNzcxNTAzMDQ5fQ.Yj8ki_-bB7xyKnxODdzMQx8pvwu6pwaLw2XhG9rkyfQnKsk9u9C1Ei3qmp3oVPzbJoPqaxyJTgPo-utdX7W1c436gq2MADk_IWCOU17eKGjgJhCNH6fRS8C3tNKSWLyV9Hj8mP1AAEDlZ6E1Eui_d4LS5fgMCOgYYuiRy3BMagtn-lwdCwcavRnT7qa4f9N-UKIP6tlH4_wGCsvufV20mj1R5PAdsuMx2UplRJTL8fUKTB9ujB5OiqwbnEJZHCgcQqCh-nKyf3pzawzVRPYlCx2prAWNlXUEGF_-5J4wX8YTS7427GfwFauhOQfuUjBqmE2XO7irH8itxJQUDtWk0Q","firebaseProjectId":"crm-a-52615261-92e17"}
+[info] 
+     ######## #### ########  ######## ########     ###     ######  ########
+     ##        ##  ##     ## ##       ##     ##  ##   ##  ##       ##
+     ######    ##  ########  ######   ########  #########  ######  ######
+     ##        ##  ##    ##  ##       ##     ## ##     ##       ## ##
+     ##       #### ##     ## ######## ########  ##     ##  ######  ########
+
+You're about to initialize a Firebase project in this directory:
+
+  /home/user/crm-a
+
+[info] 
+=== Project Setup
+[info] 
+[info] First, let's associate this project directory with a Firebase project.
+[info] You can create multiple project aliases by running firebase use --add, 
+[info] 
+[debug] [2026-02-18T12:10:49.804Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform","https://www.googleapis.com/auth/userinfo.email"]
+[debug] [2026-02-18T12:10:49.804Z] > authorizing via signed-in user (minitraveler2025@gmail.com)
+[debug] [2026-02-18T12:10:49.809Z] Checked if tokens are valid: true, expires at: 1771420243990
+[debug] [2026-02-18T12:10:49.809Z] Checked if tokens are valid: true, expires at: 1771420243990
+[debug] [2026-02-18T12:10:49.809Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects/crm-a-52615261-92e17 [none]
+[debug] [2026-02-18T12:10:50.039Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects/crm-a-52615261-92e17 200
+[debug] [2026-02-18T12:10:50.039Z] <<< [apiv2][body] GET https://firebase.googleapis.com/v1beta1/projects/crm-a-52615261-92e17 {"projectId":"crm-a-52615261-92e17","projectNumber":"442835393211","displayName":"Firebase app","name":"projects/crm-a-52615261-92e17","resources":{"hostingSite":"crm-a-52615261-92e17"},"state":"ACTIVE","etag":"1_efecfbfd-9d2e-4af0-b78b-cd697e53e9ad"}
+[info] i  Using project crm-a-52615261-92e17 (Firebase app) . 
+[info] 
+=== Hosting Setup
+[debug] [2026-02-18T12:10:50.054Z] Checked if tokens are valid: true, expires at: 1771420243990
+[debug] [2026-02-18T12:10:50.054Z] Checked if tokens are valid: true, expires at: 1771420243990
+[debug] [2026-02-18T12:10:50.054Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects/crm-a-52615261-92e17 [none]
+[debug] [2026-02-18T12:10:50.257Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects/crm-a-52615261-92e17 200
+[debug] [2026-02-18T12:10:50.257Z] <<< [apiv2][body] GET https://firebase.googleapis.com/v1beta1/projects/crm-a-52615261-92e17 {"projectId":"crm-a-52615261-92e17","projectNumber":"442835393211","displayName":"Firebase app","name":"projects/crm-a-52615261-92e17","resources":{"hostingSite":"crm-a-52615261-92e17"},"state":"ACTIVE","etag":"1_efecfbfd-9d2e-4af0-b78b-cd697e53e9ad"}
