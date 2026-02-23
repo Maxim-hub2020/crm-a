@@ -1,67 +1,64 @@
 import React from 'react';
-import { Search } from 'lucide-react';
+import { Search, Plus, User } from 'lucide-react';
 import { Input } from './UI';
 
+const ClientCard = ({ client, onSelect, userRole, manager }) => {
+    return (
+        <div 
+            onClick={() => onSelect(client)} 
+            className="bg-white rounded-3xl p-5 sm:p-6 shadow-lg hover:shadow-2xl hover:-translate-y-1 transition-all cursor-pointer">
+            <div className="flex items-center gap-5">
+                <div className="bg-blue-100 text-blue-500 rounded-2xl p-4">
+                    <User size={28}/>
+                </div>
+                <div>
+                    <h3 className="font-bold text-lg sm:text-xl text-gray-800 truncate">{client.name}</h3>
+                    <p className="text-sm text-gray-400 truncate">{client.email || 'Email не указан'}</p>
+                </div>
+            </div>
+            {userRole === 'admin' && manager && (
+                <div className="mt-4 pt-4 border-t border-gray-100 text-xs text-gray-500">
+                    Ответственный: <span className="font-semibold text-gray-600">{manager.name}</span>
+                </div>
+            )}
+        </div>
+    );
+};
+
 export function ClientsView({ clients, setEditingClient, managers, userRole, searchTerm, onSearchChange }) {
-     const getManagerName = (id) => managers.find(m => m.id === id)?.name || 'Не назначен';
-     return (
+    const getManagerForClient = (managerId) => managers.find(m => m.id === managerId);
+
+    return (
         <div>
-            <div className="mb-4 relative max-w-sm">
-                 <Input 
-                    value={searchTerm}
-                    onChange={e => onSearchChange(e.target.value)} 
-                    placeholder="Поиск..."
-                    className="pl-10"
-                />
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+            <div className="flex flex-col sm:flex-row gap-4 mb-6">
+                <div className="flex-grow relative">
+                     <Input 
+                        value={searchTerm}
+                        onChange={e => onSearchChange(e.target.value)} 
+                        placeholder="Поиск по имени, email или телефону..."
+                        className="pl-10"
+                    />
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                </div>
             </div>
-            {/* Desktop Table */}
-            <div className="hidden md:block bg-white rounded-[32px] shadow-lg overflow-hidden">
-                <table className="min-w-full">
-                    <thead className="bg-gray-50">
-                         <tr>
-                            <th className="px-6 py-4 text-left text-xs font-black text-gray-500 uppercase tracking-widest">Имя</th>
-                            <th className="px-6 py-4 text-left text-xs font-black text-gray-500 uppercase tracking-widest">Контакты</th>
-                            {userRole === 'admin' && <th className="px-6 py-4 text-left text-xs font-black text-gray-500 uppercase tracking-widest">Менеджер</th>}
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                        {clients.map(client => (
-                            <tr 
-                                key={client.id} 
-                                onClick={() => setEditingClient(client)}
-                                className="hover:bg-blue-50/30 cursor-pointer transition-colors"
-                            >
-                                <td className="px-6 py-4 whitespace-nowrap"><div className="font-bold text-sm text-gray-900">{client.name}</div></td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                    <div className="truncate">{client.email}</div>
-                                    <div className="font-medium text-xs opacity-70">{client.phone}</div>
-                                </td>
-                                {userRole === 'admin' && <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{getManagerName(client.managerId)}</td>}
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-            {/* Mobile Cards */}
-            <div className="md:hidden space-y-4">
-                 {clients.map(client => (
-                    <div 
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
+                {clients.map(client => (
+                    <ClientCard 
                         key={client.id} 
-                        onClick={() => setEditingClient(client)}
-                        className="bg-white rounded-3xl shadow-sm p-5 space-y-3 border border-transparent active:border-blue-200"
-                    >
-                         <div className="font-bold text-lg text-gray-900">{client.name}</div>
-                         <div className="text-sm text-gray-600 space-y-1">
-                            <p className="truncate opacity-70">{client.email || 'Нет email'}</p>
-                            <p className="font-medium">{client.phone || 'Нет телефона'}</p>
-                         </div>
-                        {userRole === 'admin' && (
-                             <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest pt-2 border-t">Менеджер: {getManagerName(client.managerId)}</div>
-                        )}
-                    </div>
-                 ))}
+                        client={client} 
+                        onSelect={setEditingClient}
+                        userRole={userRole}
+                        manager={getManagerForClient(client.managerId)}
+                    />
+                ))}
             </div>
+             {clients.length === 0 && (
+                <div className="text-center text-gray-400 py-20">
+                    <User size={48} className="mx-auto mb-4"/>
+                    <h3 className="text-xl font-bold mb-2">Клиентов пока нет</h3>
+                    <p>Нажмите "Новый клиент", чтобы добавить первого.</p>
+                </div>
+            )}
         </div>
     );
 }

@@ -7,11 +7,11 @@ export function DashboardView({ deals, tasks, stages, clients, managers, userRol
     const getManagerName = (id) => managers.find(m => m.id === id)?.name || 'Не назначен';
 
     const { stuckDeals, upcomingTasks } = useMemo(() => {
-        const fiveDaysAgo = new Date();
-        fiveDaysAgo.setDate(fiveDaysAgo.getDate() - 5);
+        const threeDaysAgo = new Date();
+        threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
 
         const stuck = deals.filter(deal => 
-            deal.stageUpdatedAt && deal.stageUpdatedAt.toDate() < fiveDaysAgo
+            deal.stageUpdatedAt && deal.stageUpdatedAt.toDate() < threeDaysAgo
         );
 
         const now = new Date();

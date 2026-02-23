@@ -38,10 +38,9 @@ export function TransactionForm({ onClose, adminId, categories, accounts, dealId
             return;
         }
 
-        const creatorId = userRole === 'manager' ? managerDocId : (userRole === 'admin' ? 'admin' : null);
-        const data = { ...formData, amount: Number(formData.amount), dealId: dealId || null, createdBy: creatorId };
-
         if (editingTransaction?.id) {
+             const creatorId = userRole === 'manager' ? managerDocId : (userRole === 'admin' ? 'admin' : null);
+             const data = { ...formData, amount: Number(formData.amount), dealId: dealId || null, createdBy: creatorId };
              const transactionRef = doc(db, 'artifacts', appId, 'users', adminId, 'transactions', editingTransaction.id);
              await updateDoc(transactionRef, data);
              if (editingTransaction.dealId) {
@@ -49,14 +48,17 @@ export function TransactionForm({ onClose, adminId, categories, accounts, dealId
                  await updateDoc(dealTransactionRef, data);
              }
         } else {
+            const creatorId = userRole === 'manager' ? managerDocId : (userRole === 'admin' ? 'admin' : null);
+            const data = { ...formData, amount: Number(formData.amount), dealId: dealId || null, createdBy: creatorId, createdAt: serverTimestamp() };
+            
             const collectionPath = dealId 
                 ? collection(db, 'artifacts', appId, 'users', adminId, 'deals', dealId, 'transactions')
                 : collection(db, 'artifacts', appId, 'users', adminId, 'transactions');
-            const newDocRef = await addDoc(collectionPath, { ...data, createdAt: serverTimestamp() });
+            const newDocRef = await addDoc(collectionPath, data);
             
             if (dealId) {
                  const mainCollectionRef = collection(db, 'artifacts', appId, 'users', adminId, 'transactions');
-                 await setDoc(doc(mainCollectionRef, newDocRef.id), { ...data, createdAt: serverTimestamp() });
+                 await setDoc(doc(mainCollectionRef, newDocRef.id), data);
             }
         }
 

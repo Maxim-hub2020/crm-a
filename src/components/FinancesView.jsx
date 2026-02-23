@@ -1,11 +1,75 @@
-import React, { useMemo } from 'react';
-import { Search, Clock, Pencil, Trash2, UserCheck } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { Search, Clock, Pencil, Trash2, ArrowUp, ArrowDown, ChevronsUpDown } from 'lucide-react';
 import { Input, Select } from './UI';
 
+const SortableHeader = ({ children, sortKey, sortConfig, onSort }) => {
+    const isCurrentKey = sortConfig.key === sortKey;
+    const Icon = isCurrentKey ? (sortConfig.direction === 'asc' ? ArrowUp : ArrowDown) : ChevronsUpDown;
+    
+    return (
+        <th onClick={() => onSort(sortKey)} className="px-6 py-3 text-left text-xs font-black text-gray-500 uppercase tracking-widest cursor-pointer hover:bg-gray-100 transition-colors">
+            <div className="flex items-center gap-2">
+                <span>{children}</span>
+                <Icon size={14} />
+            </div>
+        </th>
+    );
+};
+
+
 export function FinancesView ({ transactions, accounts, categories, managers, userRole, onEditTransaction, onRequestDelete, searchTerm, onSearchChange, selectedAccount, onAccountChange }) {
-    const getCategoryName = (id) => categories.find(c => c.id === id)?.name || <span className="text-gray-400">Без категории</span>;
-    const getAccountName = (id) => accounts.find(a => a.id === id)?.name || <span className="text-gray-400">Без счета</span>;
+    const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
+    
+    const getCategoryName = (id) => categories.find(c => c.id === id)?.name || '';
+    const getAccountName = (id) => accounts.find(a => a.id === id)?.name || '';
     const getManagerName = (id) => managers.find(m => m.id === id)?.name || id;
+
+    const sortedTransactions = useMemo(() => {
+        const sortableItems = [...transactions];
+        if (sortConfig.key) {
+            sortableItems.sort((a, b) => {
+                let aValue, bValue;
+
+                switch(sortConfig.key) {
+                    case 'category':
+                        aValue = getCategoryName(a.categoryId);
+                        bValue = getCategoryName(b.categoryId);
+                        break;
+                    case 'account':
+                        aValue = getAccountName(a.accountId);
+                        bValue = getAccountName(b.accountId);
+                        break;
+                     case 'createdBy':
+                        aValue = getManagerName(a.createdBy);
+                        bValue = getManagerName(b.createdBy);
+                        break;
+                    default:
+                        aValue = a[sortConfig.key];
+                        bValue = b[sortConfig.key];
+                }
+
+                if (sortConfig.key === 'date') {
+                    return sortConfig.direction === 'asc' ? new Date(aValue) - new Date(bValue) : new Date(bValue) - new Date(aValue);
+                }
+                if (typeof aValue === 'number' && typeof bValue === 'number') {
+                    return sortConfig.direction === 'asc' ? aValue - bValue : bValue - aValue;
+                }
+                if (typeof aValue === 'string' && typeof bValue === 'string') {
+                    return sortConfig.direction === 'asc' ? aValue.localeCompare(bValue) : bValue.localeCompare(aValue);
+                }
+                return 0;
+            });
+        }
+        return sortableItems;
+    }, [transactions, sortConfig, categories, accounts, managers]);
+
+    const handleSort = (key) => {
+        let direction = 'asc';
+        if (sortConfig.key === key && sortConfig.direction === 'asc') {
+            direction = 'desc';
+        }
+        setSortConfig({ key, direction });
+    };
 
     const { actualIncome, actualExpense, plannedExpense, actualBalance } = useMemo(() => {
         let actualIncome = 0;
@@ -72,65 +136,69 @@ export function FinancesView ({ transactions, accounts, categories, managers, us
                 <table className="min-w-full">
                     <thead className="bg-gray-50">
                          <tr>
-                            <th className="px-6 py-3 text-left text-xs font-black text-gray-500 uppercase tracking-widest">Дата</th>
-                            <th className="px-6 py-3 text-left text-xs font-black text-gray-500 uppercase tracking-widest">Сумма</th>
-                            <th className="px-6 py-3 text-left text-xs font-black text-gray-500 uppercase tracking-widest">Категория</th>
-                            <th className="px-6 py-3 text-left text-xs font-black text-gray-500 uppercase tracking-widest">Счет</th>
-                            <th className="px-6 py-3 text-left text-xs font-black text-gray-500 uppercase tracking-widest">Описание</th>
-                            {userRole === 'admin' && <th className="px-6 py-3 text-left text-xs font-black text-gray-500 uppercase tracking-widest">Создал</th>}
+                            <SortableHeader sortKey="date" sortConfig={sortConfig} onSort={handleSort}>Дата</SortableHeader>
+                            <SortableHeader sortKey="amount" sortConfig={sortConfig} onSort={handleSort}>Сумма</SortableHeader>
+                            <SortableHeader sortKey="category" sortConfig={sortConfig} onSort={handleSort}>Категория</SortableHeader>
+                            <SortableHeader sortKey="account" sortConfig={sortConfig} onSort={handleSort}>Счет</SortableHeader>
+                            <SortableHeader sortKey="description" sortConfig={sortConfig} onSort={handleSort}>Описание</SortableHeader>
+                            {userRole === 'admin' && <SortableHeader sortKey="createdBy" sortConfig={sortConfig} onSort={handleSort}>Создал</SortableHeader>}
                             <th className="px-6 py-3 text-left text-xs font-black text-gray-500 uppercase tracking-widest">Действия</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                        {transactions.map(t => (
-                            <tr key={t.id} className={`hover:bg-gray-50/50 ${t.status === 'planned' ? 'opacity-60' : ''}`}>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                    <div className="flex items-center gap-2">
-                                        {t.status === 'planned' && <Clock size={14} className="text-blue-500" />}
-                                        {new Date(t.date).toLocaleDateString('ru-RU')}
-                                    </div>
-                                </td>
-                                <td className={`px-6 py-4 whitespace-nowrap text-sm font-bold ${t.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
-                                    {t.type === 'income' ? '+' : '-'} {t.amount.toLocaleString()} ₽
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800">{getCategoryName(t.categoryId)}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800">{getAccountName(t.accountId)}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 truncate max-w-xs">{t.description}</td>
-                                {userRole === 'admin' && <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{getManagerName(t.createdBy)}</td>}
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                   <div className="flex items-center gap-2">
-                                     <button onClick={() => onEditTransaction(t)} className="p-1 hover:text-blue-600"><Pencil size={14}/></button>
-                                     <button onClick={() => onRequestDelete(t.id, 'transaction', `Операция на ${t.amount} ₽`)} className="p-1 hover:text-red-600"><Trash2 size={14}/></button>
-                                   </div>
-                               </td>
-                            </tr>
-                        ))}
+                        {sortedTransactions.map(t => {
+                            return (
+                                <tr key={t.id} className={`hover:bg-gray-50/50 transition-opacity ${t.status === 'planned' ? 'opacity-80' : ''}`}>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                        <div className="flex items-center gap-2">
+                                            {t.status === 'planned' && <Clock size={14} className="text-blue-500" />}
+                                            {new Date(t.date).toLocaleDateString('ru-RU')}
+                                        </div>
+                                    </td>
+                                    <td className={`px-6 py-4 whitespace-nowrap text-sm font-bold ${t.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
+                                        {t.type === 'income' ? '+' : '-'} {t.amount.toLocaleString()} ₽
+                                    </td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800">{getCategoryName(t.categoryId) || <span className="text-gray-400">Без категории</span>}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800">{getAccountName(t.accountId) || <span className="text-gray-400">Без счета</span>}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 truncate max-w-xs">{t.description}</td>
+                                    {userRole === 'admin' && <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{getManagerName(t.createdBy)}</td>}
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                       <div className="flex items-center gap-2">
+                                            <button onClick={() => onEditTransaction(t)} className="p-1 hover:text-blue-600"><Pencil size={14}/></button>
+                                            <button onClick={() => onRequestDelete(t.id, 'transaction', `Операция на ${t.amount} ₽`)} className="p-1 hover:text-red-600"><Trash2 size={14}/></button>
+                                       </div>
+                                   </td>
+                                </tr>
+                            );
+                        })}
                     </tbody>
                 </table>
             </div>
             {/* Mobile Cards */}
              <div className="md:hidden space-y-4">
-                {transactions.map(t => (
-                    <div key={t.id} className={`bg-white rounded-2xl shadow-lg p-4 space-y-2 ${t.status === 'planned' ? 'opacity-70' : ''}`}>
-                        <div className="flex justify-between items-start">
-                             <div className={`text-xl font-bold ${t.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>{t.type === 'income' ? '+' : '-'} {t.amount.toLocaleString()} ₽</div>
-                             <div className="text-xs text-gray-500 flex items-center gap-1.5">
-                                {t.status === 'planned' && <Clock size={12} className="text-blue-500" />}
-                                {new Date(t.date).toLocaleDateString('ru-RU')}
+                {sortedTransactions.map(t => {
+                     return (
+                        <div key={t.id} className={`bg-white rounded-2xl shadow-lg p-4 space-y-2 transition-opacity ${t.status === 'planned' ? 'opacity-80' : ''}`}>
+                            <div className="flex justify-between items-start">
+                                <div className={`text-xl font-bold ${t.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>{t.type === 'income' ? '+' : '-'} {t.amount.toLocaleString()} ₽</div>
+                                <div className="text-xs text-gray-500 flex items-center gap-1.5">
+                                    {t.status === 'planned' && <Clock size={12} className="text-blue-500" />}
+                                    {new Date(t.date).toLocaleDateString('ru-RU')}
+                                </div>
+                            </div>
+                            <div className="text-sm text-gray-600 border-t pt-2 space-y-1">
+                                <p className="truncate"><strong>Описание:</strong> {t.description || '-'}</p>
+                                <p><strong>Категория:</strong> {getCategoryName(t.categoryId) || <span className="text-gray-400">Без категории</span>}</p>
+                                <p><strong>Счет:</strong> {getAccountName(t.accountId) || <span className="text-gray-400">Без счета</span>}</p>
+                                {userRole === 'admin' && <p><strong>Создал:</strong> {getManagerName(t.createdBy)}</p>}
+                            </div>
+                             <div className="flex justify-end items-center gap-4 pt-2 border-t">
+                                <button onClick={() => onEditTransaction(t)} className="text-blue-600 font-bold text-sm">Изменить</button>
+                                <button onClick={() => onRequestDelete(t.id, 'transaction', `Операция на ${t.amount} ₽`)} className="text-red-500 font-bold text-sm">Удалить</button>
                             </div>
                         </div>
-                        <div className="text-sm text-gray-600 border-t pt-2 space-y-1">
-                             <p className="truncate"><strong>Описание:</strong> {t.description || '-'}</p>
-                             <p><strong>Категория:</strong> {getCategoryName(t.categoryId)}</p>
-                             <p><strong>Счет:</strong> {getAccountName(t.accountId)}</p>
-                              {userRole === 'admin' && <p><strong>Создал:</strong> {getManagerName(t.createdBy)}</p>}
-                        </div>
-                        <div className="flex justify-end gap-4 pt-2 border-t">
-                            <button onClick={() => onEditTransaction(t)} className="text-blue-600 font-bold text-sm">Изменить</button>
-                            <button onClick={() => onRequestDelete(t.id, 'transaction', `Операция на ${t.amount} ₽`)} className="text-red-500 font-bold text-sm">Удалить</button>
-                        </div>
-                    </div>
-                ))}
+                    );
+                })}
             </div>
         </div>
     );

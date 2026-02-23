@@ -114,7 +114,7 @@ export function DealCard({ deal, onClose, onSaveNewDeal, onRequestDelete, onFile
                     <div className="flex-1 overflow-y-auto no-scrollbar -mr-6 -ml-6 pl-6 pr-6">
                         {activeTab === 'comments' && <DealComments {...{adminId, dealId: dealData.id, user}} />}
                         {activeTab === 'tasks' && <DealTasks adminId={adminId} deal={dealData} tasks={dealTasks} />}
-                        {activeTab === 'finances' && <DealFinances {...{adminId, dealId: dealData.id, categories, accounts, managers, userRole, onRequestDelete }} />}
+                        {activeTab === 'finances' && <DealFinances {...{adminId, dealId: dealData.id, categories, accounts, managers, userRole, onRequestDelete, managerDocId }} />}
                     </div>
                 </>) : (
                     <div className="flex-1 flex items-center justify-center text-center text-gray-400 p-8">

@@ -1,135 +1,95 @@
-import React, { useState, useMemo } from 'react';
-import { Archive, ListTodo, Plus, Calendar } from 'lucide-react';
+import React, { useState } from 'react';
+import { CheckSquare, Square, MoreHorizontal, Plus, Trash2 } from 'lucide-react';
+import { doc, updateDoc, addDoc, collection, serverTimestamp } from 'firebase/firestore';
 import { db, appId } from '../firebase';
-import { collection, addDoc, updateDoc, doc, deleteDoc, writeBatch, serverTimestamp } from 'firebase/firestore';
 import { Input, PrimaryBtn } from './UI';
-import { TaskItem } from './TaskItem';
 
-export function TasksView({ tasks, adminId }) {
-    const [newTaskText, setNewTaskText] = useState('');
-    const [newTaskDeadline, setNewTaskDeadline] = useState('');
-    const [showArchived, setShowArchived] = useState(false);
+const TaskItem = ({ task, onUpdate, onRequestDelete }) => {
 
-    const handleAddTask = async (e) => {
-        e.preventDefault();
-        if(!newTaskText.trim() || !adminId) return;
-        await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'tasks'), {
-            text: newTaskText,
-            completed: false,
-            deadline: newTaskDeadline,
-            createdAt: serverTimestamp()
-        });
-        setNewTaskText('');
-        setNewTaskDeadline('');
+    const handleToggle = () => {
+        onUpdate(task.id, { completed: !task.completed });
     };
 
-    const toggleTask = async (task) => {
-        const taskRef = doc(db, 'artifacts', appId, 'users', adminId, 'tasks', task.id);
-        await updateDoc(taskRef, { completed: !task.completed });
-    };
-
-    const deleteTask = async (taskId) => {
-        if (!confirm("Удалить задачу?")) return;
-        const taskRef = doc(db, 'artifacts', appId, 'users', adminId, 'tasks', taskId);
-        await deleteDoc(taskRef);
-    };
-
-    const clearArchive = async () => {
-        if (!confirm("Вы уверены, что хотите навсегда удалить все выполненные задачи? Это действие необратимо.")) return;
-        const batch = writeBatch(db);
-        tasks.filter(t => t.completed).forEach(task => {
-            const taskRef = doc(db, 'artifacts', appId, 'users', adminId, 'tasks', task.id);
-            batch.delete(taskRef);
-        });
-        await batch.commit();
-    }
-
-    const { today, soon, later, archived } = useMemo(() => {
-        const today = [];
-        const soon = [];
-        const later = [];
-        const archived = [];
-
-        const now = new Date();
-        const todayDate = now.setHours(0, 0, 0, 0);
-        const sevenDaysFromNow = new Date(todayDate).setDate(new Date(todayDate).getDate() + 7);
-
-        tasks.forEach(task => {
-            if (task.completed) {
-                archived.push(task);
-                return;
-            }
-
-            if (!task.deadline) {
-                later.push(task);
-                return;
-            }
-
-            const taskDate = new Date(task.deadline).setHours(0, 0, 0, 0);
-            
-            if (taskDate < todayDate) {
-                today.push(task);
-            } else if (taskDate === todayDate) {
-                today.push(task);
-            } else if (taskDate <= sevenDaysFromNow) {
-                soon.push(task);
-            } else {
-                later.push(task);
-            }
-        });
-
-        return { 
-            today: today.sort((a,b) => new Date(a.deadline) - new Date(b.deadline)),
-            soon: soon.sort((a,b) => new Date(a.deadline) - new Date(b.deadline)),
-            later: later.sort((a,b) => new Date(a.deadline) - new Date(b.deadline)),
-            archived: archived.sort((a,b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0))
-        };
-    }, [tasks]);
-
-    const TaskSection = ({ title, tasks, onToggle, onDelete, onClear }) => {
-        if (tasks.length === 0 && title !== 'Архив') return null;
-        return (
-            <div className="mb-8">
-                <div className="flex justify-between items-center mb-4">
-                    <h3 className="text-lg font-black text-gray-500 tracking-wider uppercase">{title}</h3>
-                    {onClear && <button onClick={onClear} className="text-xs font-bold text-red-500 hover:underline">Очистить архив</button>}
-                </div>
-                <div className="space-y-3">
-                    {tasks.length > 0 
-                        ? tasks.map(task => <TaskItem key={task.id} task={task} onToggle={onToggle} onDelete={onDelete} />)
-                        : <p className="text-sm text-gray-400 italic">Нет задач в этой категории.</p>
-                    }
-                </div>
-            </div>
-        );
+    const handleDelete = () => {
+        const itemName = `задачу \"${task.text}\"`;
+        onRequestDelete(task.id, 'task', itemName);
     };
 
     return (
-        <div className="max-w-4xl mx-auto">
-            <div className="bg-white rounded-[32px] shadow-lg p-4 sm:p-8">
-                <div className="flex justify-between items-center mb-6">
-                     <h2 className="text-xl font-black text-gray-800">{showArchived ? 'Архив задач' : 'Общий список задач'}</h2>
-                     <button onClick={() => setShowArchived(!showArchived)} className="flex items-center gap-2 text-sm font-bold py-2 px-4 rounded-full hover:bg-gray-100">
-                         {showArchived ? <ListTodo size={16} /> : <Archive size={16} />} 
-                         {showArchived ? 'К списку задач' : 'Архив'}
-                     </button>
-                </div>
+        <div className={`flex items-center justify-between p-4 rounded-2xl bg-white shadow-sm hover:shadow-md transition-all ${task.completed ? 'line-through text-gray-400' : ''}`}>
+            <div onClick={handleToggle} className="flex items-center gap-3 cursor-pointer flex-grow">
+                {task.completed ? <CheckSquare size={22} className="text-green-500" /> : <Square size={22} className="text-gray-300" />}
+                <span className="text-sm text-gray-800">{task.text}</span>
+            </div>
+            <div className="ml-4">
+                <button onClick={handleDelete} className="p-1 rounded-full text-gray-400 hover:bg-red-100 hover:text-red-600 transition-colors">
+                    <Trash2 size={16} />
+                </button>
+            </div>
+        </div>
+    );
+};
 
-                {!showArchived && (
-                    <form onSubmit={handleAddTask} className="flex flex-col sm:flex-row gap-2 mb-8 items-end p-4 border rounded-2xl">
-                        <Input value={newTaskText} onChange={e => setNewTaskText(e.target.value)} placeholder="Что нужно сделать?" label="Новая задача"/>
-                        <Input type="date" label="Срок" value={newTaskDeadline} onChange={e => setNewTaskDeadline(e.target.value)} className="w-full sm:w-48"/>
-                        <PrimaryBtn type="submit" className="w-full sm:w-auto"><Plus size={18}/></PrimaryBtn>
-                    </form>
-                )}
 
-                {showArchived 
-                    ? <TaskSection title="Архив" tasks={archived} onToggle={toggleTask} onDelete={deleteTask} onClear={clearArchive} />
-                    : <>
-                        <TaskSection title="Сегодня" tasks={today} onToggle={toggleTask} onDelete={deleteTask} />
-                        <TaskSection title="В скором времени" tasks={soon} onToggle={toggleTask} onDelete={deleteTask} />
-                        <TaskSection title="Позже" tasks={later} onToggle={toggleTask} onDelete={deleteTask} />
-                      </>
+export function TasksView({ tasks, adminId, onRequestDelete, userRole }) {
+    const [newTask, setNewTask] = useState('');
+    const [isAdding, setIsAdding] = useState(false);
+
+    const handleAddTask = async (e) => {
+        e.preventDefault();
+        if (!newTask.trim() || !adminId) return;
+
+        setIsAdding(true);
+        try {
+            await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'tasks'), {
+                text: newTask,
+                completed: false,
+                createdAt: serverTimestamp()
+            });
+            setNewTask('');
+        } catch (error) {
+            console.error("Error adding task: ", error);
+        } finally {
+            setIsAdding(false);
+        }
+    };
+
+    const handleUpdateTask = async (id, data) => {
+        if (!adminId) return;
+        const taskRef = doc(db, 'artifacts', appId, 'users', adminId, 'tasks', id);
+        await updateDoc(taskRef, data);
+    };
+
+    // Filter out trashed tasks from being displayed
+    const visibleTasks = tasks.filter(t => t.status !== 'trashed');
+
+    return (
+        <div className="max-w-3xl mx-auto">
+            <form onSubmit={handleAddTask} className="flex items-center gap-3 mb-6 bg-white p-3 rounded-2xl shadow-lg">
+                <Input 
+                    value={newTask}
+                    onChange={e => setNewTask(e.target.value)}
+                    placeholder="Например, позвонить клиенту..."
+                    className="flex-grow !py-3"
+                    disabled={isAdding}
+                />
+                <PrimaryBtn type="submit" disabled={!newTask.trim() || isAdding} className="!py-3">
+                    <Plus size={20}/>
+                    <span className="hidden sm:inline">Добавить</span>
+                </PrimaryBtn>
+            </form>
+
+            <div className="space-y-3">
+                {visibleTasks.length > 0 
+                    ? visibleTasks.map(task => (
+                        <TaskItem 
+                            key={task.id} 
+                            task={task} 
+                            onUpdate={handleUpdateTask} 
+                            onRequestDelete={onRequestDelete}
+                        />
+                    ))
+                    : <div className="text-center text-gray-400 py-10">Задач пока нет. Добавьте первую!</div>
                 }
             </div>
         </div>

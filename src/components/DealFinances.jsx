@@ -5,7 +5,7 @@ import { PrimaryBtn, Modal } from './UI';
 import { TransactionForm } from './TransactionForm';
 import { db, appId } from '../firebase';
 
-export function DealFinances({ adminId, dealId, categories, accounts, managers, userRole, onRequestDelete }) {
+export function DealFinances({ adminId, dealId, categories, accounts, managers, userRole, onRequestDelete, managerDocId }) {
     const [transactions, setTransactions] = useState([]);
     const [isFormOpen, setIsFormOpen] = useState(false);
     const [editingTransaction, setEditingTransaction] = useState(null);

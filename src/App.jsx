@@ -27,6 +27,7 @@ import { DealCard } from './components/DealCard';
 import { TransactionForm } from './components/TransactionForm';
 import { ReassignModal } from './components/ReassignModal';
 import { ClientDealDetail } from './components/ClientDealDetail';
+import { PasswordChangeModal } from './components/PasswordChangeModal';
 
 const { 
     LayoutDashboard, Users, Wallet, Settings, Briefcase, 
@@ -75,6 +76,8 @@ export default function App() {
     const [editingTransaction, setEditingTransaction] = useState(null);
     const [selectedClientDeal, setSelectedClientDeal] = useState(null);
     const [managerToDelete, setManagerToDelete] = useState(null);
+    const [isPasswordChangeModalOpen, setIsPasswordChangeModalOpen] = useState(false);
+
 
     const openDealModal = (deal, stageId) => {
         setEditingDeal(deal ? deal : { stageId: stageId || (stages[0]?.id || '') });
@@ -85,19 +88,42 @@ export default function App() {
     useEffect(() => {
         const unsub = onAuthStateChanged(auth, async (u) => {
             if (u && u.emailVerified) {
-                 const roleDocSnap = await getDoc(doc(db, 'user_profiles', u.uid));
-                 if (roleDocSnap.exists()) {
-                     const roleData = roleDocSnap.data();
-                     setUser(u); setUserRole(roleData.role); setAdminId(roleData.adminId); setManagerDocId(roleData.managerDocId || null);
-                     if (roleData.role === 'admin') {
+                const userProfileRef = doc(db, 'user_profiles', u.uid);
+                const roleDocSnap = await getDoc(userProfileRef);
+
+                if (roleDocSnap.exists()) {
+                    const roleData = roleDocSnap.data();
+                    const { role, adminId: userAdminId, managerDocId: userManagerDocId } = roleData;
+
+                    setUser(u);
+                    setUserRole(role);
+                    setManagerDocId(userManagerDocId || null);
+
+                    if (role === 'admin') {
+                        setAdminId(u.uid); // Admin's ID is their own UID
                         if (!roleData.companyCode) {
-                            let newCompanyCode = generateCompanyCode();
-                            await updateDoc(doc(db, 'user_profiles', u.uid), { companyCode: newCompanyCode });
+                            const newCompanyCode = generateCompanyCode();
+                            await updateDoc(userProfileRef, { companyCode: newCompanyCode });
                             setCompanyCode(newCompanyCode);
-                        } else setCompanyCode(roleData.companyCode);
-                     }
-                 }
+                        } else {
+                            setCompanyCode(roleData.companyCode);
+                        }
+                    } else if (role === 'manager') {
+                        setAdminId(userAdminId);
+                        if (userAdminId) {
+                            const adminProfileRef = doc(db, 'user_profiles', userAdminId);
+                            const adminDocSnap = await getDoc(adminProfileRef);
+                            if (adminDocSnap.exists()) {
+                                setCompanyCode(adminDocSnap.data().companyCode);
+                            }
+                        }
+                    }
+                } else {
+                    // Handle case where user exists in Auth but not in user_profiles
+                    signOut(auth); // Log them out
+                }
             } else {
+                // Reset all state when user logs out or is not verified
                 setUser(null); setUserRole(null); setAdminId(null); setManagerDocId(null); setCompanyCode(null);
                 setLoggedInClient(null); setIsClientLogin(false);
                 setStages([]); setDeals([]); setTasks([]); setClients([]); setCategories([]); setAccounts([]);
@@ -105,6 +131,7 @@ export default function App() {
             }
             setLoadingAuth(false);
         });
+
         return () => unsub();
     }, []);
 
@@ -310,33 +337,43 @@ export default function App() {
         }
     }
 
-     const handleRequestDelete = async (itemId, itemType, itemName) => {
+    const handleRequestDelete = async (itemId, itemType, itemName) => {
+        if (!adminId) return;
         const isManager = userRole === 'manager';
-        const itemRussian = itemType === 'deal' ? 'проект' : itemType === 'client' ? 'клиента' : 'операцию';
-        const confirmationText = isManager 
-            ? `Вы уверены, что хотите запросить удаление?`
-            : `Вы уверены, что хотите удалить ${itemRussian}? Это действие необратимо.`;
-        
-        if (!confirm(confirmationText)) return;
-
+    
         if (isManager) {
-            const request = {
-                itemId,
-                itemType,
-                itemName,
-                requestedBy: managerDocId,
-                status: 'pending',
-                createdAt: serverTimestamp()
-            };
-            await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'deletion_requests'), request);
-            console.log('Запрос на удаление отправлен администратору.');
-            if (itemType === 'deal') closeDealModal();
+            const confirmMessage = `Вы уверены, что хотите отправить запрос на удаление ${itemName}?
+Это действие нельзя будет отменить.`
+            if (window.confirm(confirmMessage)) {
+                 const request = {
+                    itemId,
+                    itemType,
+                    itemName,
+                    requestedBy: managerDocId,
+                    status: 'pending',
+                    createdAt: serverTimestamp()
+                };
+                await addDoc(collection(db, 'artifacts', appId, 'users', adminId, 'deletion_requests'), request);
+                console.log('Запрос на удаление отправлен администратору.');
+                if (itemType === 'deal') closeDealModal();
+                if (itemType === 'client') { setIsClientModalOpen(false); setEditingClient(null); }
+                if (itemType === 'transaction') { setIsTransactionModalOpen(false); setEditingTransaction(null); }
+            }
         } else { // Admin
-            let collectionName = itemType === 'deal' ? 'deals' : itemType === 'client' ? 'clients' : 'transactions';
-            await deleteDoc(doc(db, 'artifacts', appId, 'users', adminId, collectionName, itemId));
-            if (itemType === 'deal') closeDealModal();
-            if (itemType === 'client') { setIsClientModalOpen(false); setEditingClient(null); }
-            console.log(`${itemRussian.charAt(0).toUpperCase() + itemRussian.slice(1)} успешно удален(а).`);
+            const itemRussian = itemType === 'deal' ? 'проект' : itemType === 'client' ? 'клиента' : itemType === 'transaction' ? 'операцию' : 'задачу';
+            const confirmMessage = `Вы уверены, что хотите удалить ${itemRussian} \"${itemName}\"?`;
+    
+            if (window.confirm(confirmMessage)) {
+                 const collectionName = itemType === 'deal' ? 'deals' 
+                                    : itemType === 'client' ? 'clients' 
+                                    : itemType === 'transaction' ? 'transactions'
+                                    : 'tasks';
+                await deleteDoc(doc(db, 'artifacts', appId, 'users', adminId, collectionName, itemId));
+                console.log(`${itemType} успешно удален.`);
+                if (itemType === 'deal') closeDealModal();
+                if (itemType === 'client') { setIsClientModalOpen(false); setEditingClient(null); }
+                if (itemType === 'transaction') { setIsTransactionModalOpen(false); setEditingTransaction(null); }
+            }
         }
     };
 
@@ -344,7 +381,10 @@ export default function App() {
         const requestRef = doc(db, 'artifacts', appId, 'users', adminId, 'deletion_requests', request.id);
         if (newStatus === 'approved') {
             try {
-                const collectionName = request.itemType === 'deal' ? 'deals' : request.itemType === 'client' ? 'clients' : 'transactions';
+                const collectionName = request.itemType === 'deal' ? 'deals' 
+                                    : request.itemType === 'client' ? 'clients' 
+                                    : request.itemType === 'transaction' ? 'transactions'
+                                    : 'tasks';
                 const itemRef = doc(db, 'artifacts', appId, 'users', adminId, collectionName, request.itemId);
                 
                 const dealTransactionRef = request.itemType === 'transaction' && request.dealId
@@ -383,7 +423,6 @@ export default function App() {
         setAdminId(client.adminId);
         setIsClientLogin(false);
     }
-
 
     if (loadingAuth) return <div className="h-screen flex items-center justify-center bg-gray-50"><Loader2 className="animate-spin text-blue-600" size={48}/></div>;
 
@@ -449,7 +488,7 @@ export default function App() {
                     <NavItem icon={<ListTodo size={22}/>} label="Задачи" active={activeTab === 'tasks'} onClick={()=>{setActiveTab('tasks'); setIsSidebarOpen(false);}} isSidebarOpen={isSidebarOpen} />
                     <NavItem icon={<Users size={22}/>} label="Клиенты" active={activeTab === 'clients'} onClick={()=>{setActiveTab('clients'); setIsSidebarOpen(false);}} isSidebarOpen={isSidebarOpen} />
                     {userRole === 'admin' && <NavItem icon={<ShieldQuestion size={22}/>} label="Запросы" active={activeTab === 'requests'} onClick={()=>{setActiveTab('requests'); setIsSidebarOpen(false);}} badge={deletionRequests.filter(r=>r.status === 'pending').length} isSidebarOpen={isSidebarOpen}/>}
-                    {userRole === 'admin' && <NavItem icon={<Settings size={22}/>} label="Система" active={activeTab === 'settings'} onClick={()=>{setActiveTab('settings'); setIsSidebarOpen(false);}} isSidebarOpen={isSidebarOpen} />}
+                    {userRole !== 'client' && <NavItem icon={<Settings size={22}/>} label="Система" active={activeTab === 'settings'} onClick={()=>{setActiveTab('settings'); setIsSidebarOpen(false);}} isSidebarOpen={isSidebarOpen} />}
                 </nav>
                 <div className="p-4 border-t border-slate-100 text-center shrink-0">
                     <button onClick={()=>signOut(auth)} className="text-slate-400 hover:text-red-500 transition-colors font-black text-[10px] flex items-center justify-center gap-1 w-full py-4 hover:bg-red-50 rounded-2xl uppercase tracking-widest">
@@ -476,9 +515,9 @@ export default function App() {
                    {activeTab === 'kanban' && <KanbanView stages={stages} deals={filteredDeals} clients={clients} openDealModal={openDealModal} managers={managers} userRole={userRole} onDragEnd={handleDragEnd} searchTerm={dealSearch} onSearchChange={setDealSearch} />}
                    {activeTab === 'finances' && userRole === 'admin' && <FinancesView transactions={filteredTransactions} accounts={accounts} categories={categories} managers={managers} userRole={userRole} onEditTransaction={(t) => {setEditingTransaction(t); setIsTransactionModalOpen(true);}} onRequestDelete={handleRequestDelete} searchTerm={financeSearch} onSearchChange={setFinanceSearch} selectedAccount={selectedAccountId} onAccountChange={setSelectedAccountId} />}
                    {activeTab === 'requests' && userRole === 'admin' && <DeletionRequestsView requests={deletionRequests} onUpdateRequest={handleUpdateRequest} managers={managers} />}
-                   {activeTab === 'tasks' && <TasksView tasks={tasks} adminId={adminId} />}
+                   {activeTab === 'tasks' && <TasksView tasks={tasks} adminId={adminId} onRequestDelete={handleRequestDelete} userRole={userRole} />}
                    {activeTab === 'clients' && <ClientsView clients={filteredClients} setEditingClient={(c)=>{setEditingClient(c); setIsClientModalOpen(true);}} managers={managers} userRole={userRole} searchTerm={clientSearch} onSearchChange={setClientSearch} />}
-                   {userRole === 'admin' && activeTab === 'settings' && <SettingsView />}
+                   {(userRole === 'admin' || userRole === 'manager') && activeTab === 'settings' && <SettingsView adminId={adminId} onDeleteManager={(manager) => setManagerToDelete(manager)} companyCode={companyCode} user={user} onPasswordChange={() => setIsPasswordChangeModalOpen(true)} userRole={userRole} onAddManager={handleAddManager} />}
                 </main>
             </div>
             
@@ -510,7 +549,13 @@ export default function App() {
                 />
             }
 
-            {isClientModalOpen && <Modal title={editingClient ? "Карточка клиента" : "Новый клиент"} onClose={()=>{setIsClientModalOpen(false); setEditingClient(null);}}><ClientForm client={editingClient} onClose={()=>{setIsClientModalOpen(false); setEditingClient(null);}} {...{adminId, managerDocId, userRole, onRequestDelete: handleRequestDelete}} /></Modal>}
+            {isPasswordChangeModalOpen &&
+                <Modal title="Смена пароля" onClose={() => setIsPasswordChangeModalOpen(false)}>
+                    <PasswordChangeModal user={user} onClose={() => setIsPasswordChangeModalOpen(false)} />
+                </Modal>
+            }
+
+            {isClientModalOpen && <Modal title={editingClient ? "Карточка клиента" : "Новый клиент"} onClose={()=>{setIsClientModalOpen(false); setEditingClient(null);}}><ClientForm client={editingClient} onClose={()=>{setIsClientModalOpen(false); setEditingClient(null);}} {...{adminId, managerDocId, userRole, companyCode, onRequestDelete: handleRequestDelete}} /></Modal>}
             {isTransactionModalOpen && <Modal title={editingTransaction ? "Редактировать операцию" : "Новая операция"} onClose={()=>{setIsTransactionModalOpen(false); setEditingTransaction(null);}}><TransactionForm onClose={()=>{setIsTransactionModalOpen(false); setEditingTransaction(null);}} {...{adminId, categories, accounts, transaction: editingTransaction, managerDocId, userRole}} /></Modal>}
         </div>
     );

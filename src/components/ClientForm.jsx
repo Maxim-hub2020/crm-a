@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { db, appId } from '../firebase';
 import { collection, query, where, getDocs, addDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Input, Label, PrimaryBtn } from './UI';
-import { generatePassword } from '../utils';
+import { generatePassword, copyToClipboard } from '../utils';
+import { Copy } from 'lucide-react';
 
-export function ClientForm({ client, onClose, adminId, managerDocId, userRole, onRequestDelete }) {
+export function ClientForm({ client, onClose, adminId, managerDocId, userRole, onRequestDelete, companyCode }) {
     const [formData, setFormData] = useState(client || { name: '', email: '', phone: '', loginName: '', loginPassword: '' });
 
     useEffect(() => {
@@ -16,6 +17,19 @@ export function ClientForm({ client, onClose, adminId, managerDocId, userRole, o
 
     const handleChange = (field, value) => setFormData(prev => ({...prev, [field]: value}));
     
+    const handleCopyData = () => {
+        if (!companyCode) {
+            alert("Код компании еще не сгенерирован.");
+            return;
+        }
+        const appUrl = window.location.origin;
+        const login = formData.loginName || formData.name;
+        const password = formData.loginPassword;
+        const textToCopy = `Ссылка для входа: ${appUrl}\nКод компании: ${companyCode}\nЛогин: ${login}\nПароль: ${password}`;
+        copyToClipboard(textToCopy);
+        alert('Данные для входа скопированы в буфер обмена.');
+    };
+
     const handleSave = async () => {
         if (!formData.name || !adminId) return alert("Имя клиента - обязательное поле");
 
@@ -39,7 +53,7 @@ export function ClientForm({ client, onClose, adminId, managerDocId, userRole, o
                 const clientRef = doc(clientCollection, formData.id);
                 await updateDoc(clientRef, finalData);
             } else {
-                await addDoc(clientCollection, { ...finalData, createdAt: serverTimestamp() });
+                await addDoc(clientCollection, { ...finalData, createdAt: serverTimestamp(), adminId });
             }
             onClose();
         } catch (e) {
@@ -54,7 +68,13 @@ export function ClientForm({ client, onClose, adminId, managerDocId, userRole, o
             <Input label="Телефон" value={formData.phone || ''} onChange={e => handleChange('phone', e.target.value)} />
             
             <div className="pt-4 border-t">
-                <Label>Данные для входа клиента</Label>
+                <div className="flex justify-between items-center mb-2">
+                    <Label>Данные для входа клиента</Label>
+                    <button onClick={handleCopyData} className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 font-medium px-3 py-1 rounded-lg hover:bg-blue-50 transition-colors">
+                        <Copy size={14} />
+                        <span>Копировать данные</span>
+                    </button>
+                </div>
                 <div className="p-4 bg-gray-50 rounded-xl space-y-3">
                      <Input label="Имя для входа (логин)" value={formData.loginName || ''} onChange={e => handleChange('loginName', e.target.value)} placeholder="Можно оставить пустым, будет как Имя" />
                      <Input label="Пароль" value={formData.loginPassword || ''} onChange={e => handleChange('loginPassword', e.target.value)} />
