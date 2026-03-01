@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import { Search, Clock, Pencil, Trash2, ArrowUp, ArrowDown, ChevronsUpDown } from 'lucide-react';
-import { Input, Select } from './UI';
+import { Search, Clock, Pencil, Trash2, ArrowUp, ArrowDown, ChevronsUpDown, Filter, X } from 'lucide-react';
+import { Input, Select, SecondaryBtn } from './UI';
 
 const SortableHeader = ({ children, sortKey, sortConfig, onSort }) => {
     const isCurrentKey = sortConfig.key === sortKey;
@@ -19,13 +19,42 @@ const SortableHeader = ({ children, sortKey, sortConfig, onSort }) => {
 
 export function FinancesView ({ transactions, accounts, categories, managers, userRole, onEditTransaction, onRequestDelete, searchTerm, onSearchChange, selectedAccount, onAccountChange }) {
     const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
+    const [dateFrom, setDateFrom] = useState('');
+    const [dateTo, setDateTo] = useState('');
+    const [isDatePopoverOpen, setIsDatePopoverOpen] = useState(false);
     
     const getCategoryName = (id) => categories.find(c => c.id === id)?.name || '';
     const getAccountName = (id) => accounts.find(a => a.id === id)?.name || '';
     const getManagerName = (id) => managers.find(m => m.id === id)?.name || id;
 
+    const dateFilteredTransactions = useMemo(() => {
+        if (!dateFrom && !dateTo) {
+            return transactions;
+        }
+
+        let filtered = [...transactions];
+        if (dateFrom) {
+            const fromDate = new Date(dateFrom);
+            fromDate.setHours(0, 0, 0, 0);
+            filtered = filtered.filter(t => {
+                const transactionDate = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+                return transactionDate >= fromDate;
+            });
+        }
+        if (dateTo) {
+            const toDate = new Date(dateTo);
+            toDate.setHours(23, 59, 59, 999);
+            filtered = filtered.filter(t => {
+                const transactionDate = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+                return transactionDate <= toDate;
+            });
+        }
+
+        return filtered;
+    }, [transactions, dateFrom, dateTo]);
+
     const sortedTransactions = useMemo(() => {
-        const sortableItems = [...transactions];
+        const sortableItems = [...dateFilteredTransactions];
         if (sortConfig.key) {
             sortableItems.sort((a, b) => {
                 let aValue, bValue;
@@ -47,9 +76,11 @@ export function FinancesView ({ transactions, accounts, categories, managers, us
                         aValue = a[sortConfig.key];
                         bValue = b[sortConfig.key];
                 }
-
+                
                 if (sortConfig.key === 'date') {
-                    return sortConfig.direction === 'asc' ? new Date(aValue) - new Date(bValue) : new Date(bValue) - new Date(aValue);
+                    const aDate = aValue?.toDate ? aValue.toDate() : new Date(aValue);
+                    const bDate = bValue?.toDate ? bValue.toDate() : new Date(bValue);
+                    return sortConfig.direction === 'asc' ? aDate - bDate : bDate - aDate;
                 }
                 if (typeof aValue === 'number' && typeof bValue === 'number') {
                     return sortConfig.direction === 'asc' ? aValue - bValue : bValue - aValue;
@@ -61,7 +92,7 @@ export function FinancesView ({ transactions, accounts, categories, managers, us
             });
         }
         return sortableItems;
-    }, [transactions, sortConfig, categories, accounts, managers]);
+    }, [dateFilteredTransactions, sortConfig, categories, accounts, managers]);
 
     const handleSort = (key) => {
         let direction = 'asc';
@@ -76,7 +107,7 @@ export function FinancesView ({ transactions, accounts, categories, managers, us
         let actualExpense = 0;
         let plannedExpense = 0;
 
-        transactions.forEach(t => {
+        dateFilteredTransactions.forEach(t => {
             if (t.status === 'planned') {
                 if (t.type === 'expense') {
                     plannedExpense += t.amount;
@@ -91,7 +122,26 @@ export function FinancesView ({ transactions, accounts, categories, managers, us
         });
         const actualBalance = actualIncome - actualExpense;
         return { actualIncome, actualExpense, plannedExpense, actualBalance };
-    }, [transactions]);
+    }, [dateFilteredTransactions]);
+    
+    const handleClearDates = () => {
+        setDateFrom('');
+        setDateTo('');
+        setIsDatePopoverOpen(false);
+    };
+    
+    const dateFilterText = useMemo(() => {
+        if (dateFrom && dateTo) {
+            return `${new Date(dateFrom).toLocaleDateString('ru-RU')} - ${new Date(dateTo).toLocaleDateString('ru-RU')}`;
+        }
+        if (dateFrom) {
+            return `С ${new Date(dateFrom).toLocaleDateString('ru-RU')}`;
+        }
+        if (dateTo) {
+            return `До ${new Date(dateTo).toLocaleDateString('ru-RU')}`;
+        }
+        return 'Период';
+    }, [dateFrom, dateTo]);
 
 
     return (
@@ -115,7 +165,7 @@ export function FinancesView ({ transactions, accounts, categories, managers, us
                 </div>
             </div>
 
-             <div className="flex flex-col sm:flex-row gap-4 mb-4">
+            <div className="flex flex-col sm:flex-row gap-4 mb-4">
                 <div className="flex-grow relative">
                     <Input 
                         value={searchTerm}
@@ -129,6 +179,31 @@ export function FinancesView ({ transactions, accounts, categories, managers, us
                     <option value="all">Все счета</option>
                     {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
                 </Select>
+                 <div className="relative sm:w-64">
+                    <button 
+                        onClick={() => setIsDatePopoverOpen(!isDatePopoverOpen)} 
+                        className="w-full h-full p-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 outline-none text-sm text-left flex justify-between items-center"
+                    >
+                        <span className="truncate">{dateFilterText}</span>
+                        <Filter size={16} className="text-gray-500 shrink-0 ml-2" />
+                    </button>
+
+                    {isDatePopoverOpen && (
+                        <div 
+                            className="absolute top-full mt-2 w-full sm:w-80 bg-white rounded-2xl shadow-xl border border-gray-100 p-4 z-10 right-0 space-y-4"
+                            onClick={e => e.stopPropagation()}
+                        >
+                             <div className="grid grid-cols-2 gap-2">
+                                <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} label="Дата с" />
+                                <Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} label="Дата по" />
+                             </div>
+                             <SecondaryBtn onClick={handleClearDates} className="w-full !justify-center !text-red-500">
+                                <X size={16}/>
+                                <span>Очистить</span>
+                             </SecondaryBtn>
+                        </div>
+                    )}
+                </div>
             </div>
 
             {/* Desktop Table */}
@@ -152,7 +227,7 @@ export function FinancesView ({ transactions, accounts, categories, managers, us
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                                         <div className="flex items-center gap-2">
                                             {t.status === 'planned' && <Clock size={14} className="text-blue-500" />}
-                                            {new Date(t.date).toLocaleDateString('ru-RU')}
+                                            {new Date(t.date?.toDate ? t.date.toDate() : t.date).toLocaleDateString('ru-RU')}
                                         </div>
                                     </td>
                                     <td className={`px-6 py-4 whitespace-nowrap text-sm font-bold ${t.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
@@ -183,7 +258,7 @@ export function FinancesView ({ transactions, accounts, categories, managers, us
                                 <div className={`text-xl font-bold ${t.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>{t.type === 'income' ? '+' : '-'} {t.amount.toLocaleString()} ₽</div>
                                 <div className="text-xs text-gray-500 flex items-center gap-1.5">
                                     {t.status === 'planned' && <Clock size={12} className="text-blue-500" />}
-                                    {new Date(t.date).toLocaleDateString('ru-RU')}
+                                    {new Date(t.date?.toDate ? t.date.toDate() : t.date).toLocaleDateString('ru-RU')}
                                 </div>
                             </div>
                             <div className="text-sm text-gray-600 border-t pt-2 space-y-1">

@@ -33,6 +33,8 @@ export function DealTasks({ adminId, deal, tasks: projectTasks }) {
         const taskRef = doc(db, 'artifacts', appId, 'users', adminId, 'tasks', taskId);
         await deleteDoc(taskRef);
     };
+
+    const today = new Date().toISOString().slice(0, 10);
     
     return (
         <div className="p-1 h-full flex flex-col">
@@ -43,7 +45,7 @@ export function DealTasks({ adminId, deal, tasks: projectTasks }) {
             </div>
             <div className="mt-4 flex flex-col sm:flex-row gap-2 pt-2 border-t items-end">
                 <Input value={newTaskText} onChange={e => setNewTaskText(e.target.value)} placeholder="Новая задача"/>
-                <Input type="date" label="Срок" value={newTaskDeadline} onChange={e => setNewTaskDeadline(e.target.value)} className="w-full sm:w-40"/>
+                <Input type="date" label="Срок" value={newTaskDeadline} onChange={e => setNewTaskDeadline(e.target.value)} className="w-full sm:w-40" min={today} />
                 <PrimaryBtn onClick={handleAddTask} className="w-full sm:w-auto !px-4"><Plus size={16}/></PrimaryBtn>
             </div>
         </div>

@@ -20,21 +20,26 @@ export function TransactionForm({ onClose, adminId, categories, accounts, dealId
                 amount: editingTransaction.amount || '',
                 type: editingTransaction.type || 'expense',
                 categoryId: editingTransaction.categoryId || '',
-                accountId: editingTransaction.accountId || '',
+                accountId: editingTransaction.accountId || (accounts.length > 0 ? accounts[0].id : ''),
                 description: editingTransaction.description || '',
                 date: editingTransaction.date || new Date().toISOString().slice(0, 10),
                 status: editingTransaction.status || 'actual',
             });
+        } else {
+            setFormData(prev => ({
+                ...prev,
+                accountId: accounts.length > 0 ? accounts[0].id : ''
+            }));
         }
-    }, [editingTransaction]);
+    }, [editingTransaction, accounts]);
     
     const handleChange = (field, value) => setFormData(prev => ({...prev, [field]: value}));
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        const { amount, type, date } = formData;
-        if (!amount || !type || !date || !adminId) {
-            alert("Пожалуйста, заполните все обязательные поля.");
+        const { amount, type, date, accountId } = formData;
+        if (!amount || !type || !date || !adminId || !accountId) {
+            alert("Пожалуйста, заполните все обязательные поля, включая счет.");
             return;
         }
 
@@ -68,16 +73,19 @@ export function TransactionForm({ onClose, adminId, categories, accounts, dealId
     const filteredCategories = useMemo(() => categories.filter(c => c.type === formData.type), [categories, formData.type]);
     
     useEffect(() => {
-       if (!formData.categoryId && filteredCategories.length > 0) {
-           handleChange('categoryId', filteredCategories[0].id);
-       }
+        // When type changes, if the current category is not in the new filtered list, reset it.
+        if (!filteredCategories.some(c => c.id === formData.categoryId)) {
+            handleChange('categoryId', filteredCategories[0]?.id || '');
+        }
     }, [formData.type, filteredCategories]);
+
+    const today = new Date().toISOString().slice(0, 10);
 
     return (
         <form onSubmit={handleSubmit} className="p-6 sm:p-8 space-y-4">
             <div className="grid grid-cols-2 gap-4">
                 <Input label="Сумма *" type="number" value={formData.amount} onChange={e => handleChange('amount', e.target.value)} required />
-                <Input label="Дата *" type="date" value={formData.date} onChange={e => handleChange('date', e.target.value)} required />
+                <Input label="Дата *" type="date" value={formData.date} onChange={e => handleChange('date', e.target.value)} required min={today} />
             </div>
             <div className="grid grid-cols-2 gap-4">
                 <Select label="Тип" value={formData.type} onChange={e => handleChange('type', e.target.value)}>
@@ -91,10 +99,9 @@ export function TransactionForm({ onClose, adminId, categories, accounts, dealId
             </div>
             <Select label="Категория" value={formData.categoryId} onChange={e => handleChange('categoryId', e.target.value)}>
                 <option value="">Без категории</option>
-                {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {filteredCategories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)} 
             </Select>
-            <Select label="Счет" value={formData.accountId} onChange={e => handleChange('accountId', e.target.value)}>
-                <option value="">Без счета</option>
+            <Select label="Счет *" value={formData.accountId} onChange={e => handleChange('accountId', e.target.value)} required>
                 {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
             </Select>
             <div>

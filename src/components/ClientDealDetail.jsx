@@ -1,19 +1,20 @@
 import React from 'react';
-import { Check, ChevronRight } from 'lucide-react';
+import { Check } from 'lucide-react';
 
 export function ClientDealDetail({ deal, stages, transactions }) {
     const currentStageIdx = stages.findIndex(s => s.id === deal.stageId);
     const paidAmount = transactions.filter(t => t.dealId === deal.id && t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
     const remainingAmount = (deal.value || 0) - paidAmount;
+
     return (
         <div className="p-6 sm:p-8">
             <div className="space-y-6 mb-8 relative pl-6 border-l-2 border-slate-100 ml-3">
                 {stages.map((s, i) => (
-                    <div key={i} className="flex items-center gap-4 relative">
+                    <div key={s.id} className="flex items-center gap-4 relative">
                         <div className={`absolute -left-[29px] w-6 h-6 rounded-full border-4 border-white shadow-sm flex items-center justify-center ${i <= currentStageIdx ? 'bg-blue-600' : 'bg-slate-200'}`}>
                             {i <= currentStageIdx && <Check size={12} className="text-white" />}
                         </div>
-                        <div className={`text-sm font-medium ${i <= currentStageIdx ? 'text-slate-900 font-bold' : 'text-slate-400'}`}>{s.name}</div>
+                        <div className={`text-sm font-medium ${i <= currentStageIdx ? 'text-slate-900 font-bold' : 'text-slate-400'}`}>{s.title}</div>
                     </div>
                 ))}
             </div>

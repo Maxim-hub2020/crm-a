@@ -28,7 +28,7 @@ export function StagesManager({ adminId, stages, setStages }) {
         if (!newStageName.trim() || !adminId) return;
         const batch = writeBatch(db);
         const newStageRef = doc(collection(db, 'artifacts', appId, 'users', adminId, 'stages'));
-        batch.set(newStageRef, { name: newStageName, order: stages.length });
+        batch.set(newStageRef, { title: newStageName, order: stages.length });
         await batch.commit();
         setNewStageName('');
     };
@@ -39,7 +39,7 @@ export function StagesManager({ adminId, stages, setStages }) {
             return;
         }
 
-        if (window.confirm(`Вы уверены, что хотите удалить этап "${stageToDelete.name}"?`)) {
+        if (window.confirm(`Вы уверены, что хотите удалить этап "${stageToDelete.title}"?`)) {
             try {
                 const batch = writeBatch(db);
 
@@ -84,7 +84,7 @@ export function StagesManager({ adminId, stages, setStages }) {
                                         <div ref={provided.innerRef} {...provided.draggableProps} {...provided.dragHandleProps} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
                                             <div className="flex items-center gap-2">
                                                 <GripVertical size={16} className="text-gray-400"/>
-                                                <span className="font-medium text-sm">{stage.name}</span>
+                                                <span className="font-medium text-sm">{stage.title}</span>
                                             </div>
                                             <button onClick={() => deleteStage(stage)} className="text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
                                         </div>

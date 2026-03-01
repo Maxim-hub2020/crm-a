@@ -1,21 +1,21 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { collection, onSnapshot, query, orderBy, doc, updateDoc } from 'firebase/firestore';
-import { Pencil, Trash2, UserCheck, Clock } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { Pencil, Trash2, UserCheck } from 'lucide-react';
 import { PrimaryBtn, Modal } from './UI';
 import { TransactionForm } from './TransactionForm';
-import { db, appId } from '../firebase';
 
-export function DealFinances({ adminId, dealId, categories, accounts, managers, userRole, onRequestDelete, managerDocId }) {
-    const [transactions, setTransactions] = useState([]);
+export function DealFinances({ adminId, dealId, transactions = [], categories, accounts, managers, userRole, onRequestDelete, managerDocId }) {
     const [isFormOpen, setIsFormOpen] = useState(false);
     const [editingTransaction, setEditingTransaction] = useState(null);
 
-    useEffect(() => {
-        if (!dealId) return;
-        const q = query(collection(db, 'artifacts', appId, 'users', adminId, 'deals', dealId, 'transactions'), orderBy('date', 'desc'));
-        const unsub = onSnapshot(q, snap => setTransactions(snap.docs.map(d => ({id:d.id, ...d.data()}))));
-        return unsub;
-    }, [dealId, adminId]);
+    const dealTransactions = useMemo(() => 
+        transactions
+            .filter(t => t.dealId === dealId)
+            .sort((a, b) => {
+                const dateA = a.date?.toDate ? a.date.toDate() : new Date(a.date);
+                const dateB = b.date?.toDate ? b.date.toDate() : new Date(b.date);
+                return dateB - dateA;
+            })
+    , [transactions, dealId]);
 
     const getManagerName = (id) => managers.find(m => m.id === id)?.name || id;
 
@@ -31,12 +31,12 @@ export function DealFinances({ adminId, dealId, categories, accounts, managers, 
 
     return (
          <div className="p-1 h-full flex flex-col">
-            <div className="flex-1 overflow-y-auto no-scrollbar pr-2">
-                {transactions.length > 0 ? transactions.map(t => (
+            <div className="flex-1 overflow-y-auto no-scrollbar pr-2 min-h-[100px]">
+                {dealTransactions.length > 0 ? dealTransactions.map(t => (
                     <div key={t.id} className="p-3 rounded-lg hover:bg-gray-50 flex justify-between items-center group">
                         <div>
                             <p className={`font-bold ${t.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>{t.amount.toLocaleString()} ₽</p>
-                            <p className="text-xs text-gray-500">{new Date(t.date).toLocaleDateString('ru-RU')}</p>
+                            <p className="text-xs text-gray-500">{new Date(t.date?.toDate ? t.date.toDate() : t.date).toLocaleDateString('ru-RU')}</p>
                         </div>
                         <div className="flex-1 px-4 min-w-0">
                             <p className="text-sm text-gray-600 truncate">{t.description}</p>
